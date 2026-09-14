@@ -3,43 +3,54 @@
 ## Multi-Tenant Hospital Management System (HMS)
 
 * **Backend Framework**: Laravel 11 (PHP 8.3+)
-* **Database**: MySQL 8.0+
+* **Database**: MySQL 8.0+ (InnoDB with TDE)
 * **Cache & Queues**: Redis 7.0+
 * **Frontend Architecture**: Laravel Blade + Livewire 3 + Alpine.js + Tailwind CSS
 * **Product Type**: Multi-Tenant B2B Healthcare SaaS Platform
 * **Document Status**: Production-Ready Technical Specification
-* **Version**: 2.0.0 (End-to-End Complete)
+* **Version**: 2.1.0 (Hardened Architecture)
 
 ---
 
 # Table of Contents
 1. [Product Overview & Architectural Philosophy](#1-product-overview--architectural-philosophy)
-2. [Multi-Tenancy Engine & Isolation Architecture](#2-multi-tenancy-engine--isolation-architecture)
+2. [Multi-Tenancy Engine & Defense-in-Depth Isolation](#2-multi-tenancy-engine--defense-in-depth-isolation)
 3. [Frontend Architecture: Blade + Livewire 3](#3-frontend-architecture-blade--livewire-3)
 4. [Exhaustive Database Schema & Data Dictionary](#4-exhaustive-database-schema--data-dictionary)
+   * 4.1 [Tenancy & Platform Core](#41-tenancy--platform-core)
+   * 4.2 [Platform B2B SaaS Subscriptions & Metering](#42-platform-b2b-saas-subscriptions--metering)
+   * 4.3 [Hospital Structure & Clinical Staff](#43-hospital-structure--clinical-staff)
+   * 4.4 [Patients & Split Clinical Demographics (PHI)](#44-patients--split-clinical-demographics-phi)
+   * 4.5 [Clinical Encounters & Medical Records](#45-clinical-encounters--medical-records)
+   * 4.6 [Pharmacy & Inventory](#46-pharmacy--inventory)
+   * 4.7 [Diagnostic Laboratory](#47-diagnostic-laboratory)
+   * 4.8 [Inpatient (IPD) & Bed Management](#48-inpatient-ipd--bed-management)
+   * 4.9 [Hospital Billing, Invoicing & Payments](#49-hospital-billing-invoicing--payments)
+   * 4.10 [Audit Logs & Security](#410-audit-logs--security)
 5. [Role-Based Access Control (RBAC) Matrix](#5-role-based-access-control-rbac-matrix)
 6. [Core Business Engines & State Machines](#6-core-business-engines--state-machines)
 7. [Livewire Component Specifications](#7-livewire-component-specifications)
-8. [REST API Specification](#8-rest-api-specification)
+8. [REST API & Webhook Specification](#8-rest-api--webhook-specification)
 9. [Background Jobs, Queues & Notifications](#9-background-jobs-queues--notifications)
-10. [Audit Logging, PHI Security & Compliance](#10-audit-logging-phi-security--compliance)
-11. [Decisions on Previous Open Questions](#11-decisions-on-previous-open-questions)
+10. [Audit Logging, PHI Security & GDPR Right-to-Erasure](#10-audit-logging-phi-security--gdpr-right-to-erasure)
+11. [Decisions on Architecture & Open Questions](#11-decisions-on-architecture--open-questions)
 12. [Scaffolding & Implementation Sequence](#12-scaffolding--implementation-sequence)
 
 ---
 
 # 1. Product Overview & Architectural Philosophy
 
-The system is a production-grade, multi-tenant hospital management software platform engineered as a modular monolith in Laravel 11. It allows hundreds of independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, strict regulatory compliance (HIPAA/GDPR security guidelines), and high-throughput operational efficiency.
+The system is a production-grade, multi-tenant hospital management software platform engineered as a modular monolith in Laravel 11. It allows independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, strict regulatory compliance (HIPAA and GDPR), and high-throughput operational efficiency.
 
 ```
                          ┌─────────────────────────────────┐
                          │   Web / Mobile Browser Clients  │
                          └────────────────┬────────────────┘
-                                          │ HTTPS (Subdomains / SSL)
+                                          │ HTTPS (Subdomains / Wildcard SSL)
                                           ▼
                          ┌─────────────────────────────────┐
                          │   Reverse Proxy / Load Balancer │
+                         │ (Caddy On-Demand TLS/Cloudflare)│
                          └────────────────┬────────────────┘
                                           │
                    ┌──────────────────────┼──────────────────────┐
@@ -52,8 +63,8 @@ The system is a production-grade, multi-tenant hospital management software plat
                    │                      │                      │
                    ▼                      ▼                      ▼
          ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
-         │      MySQL 8     │   │      Redis 7     │   │  Object Storage  │
-         │ (Shared DB/Data) │   │ (Cache, Locks, Q)│   │ (S3 / MinIO PHI) │
+         │  MySQL 8 + TDE   │   │      Redis 7     │   │  Object Storage  │
+         │(Encrypted Tables)│   │ (Cache, Locks, Q)│   │ (S3 / MinIO PHI) │
          └──────────────────┘   └─────────┬────────┘   └──────────────────┘
                                           │
                                           ▼
@@ -63,87 +74,80 @@ The system is a production-grade, multi-tenant hospital management software plat
 ```
 
 ### Core Design Tenets
-1. **Security & Data Isolation Before Everything**: Tenant leakage is a catastrophic failure. Isolation is enforced at the database query level via Eloquent Global Scopes, composite unique keys, and route-model authorization policies.
-2. **Monolithic Simplicity with Livewire 3**: No complex decoupled SPA overhead. High-fidelity, real-time reactive user interfaces are implemented using Laravel Blade, Livewire 3, Alpine.js, and Tailwind CSS.
-3. **Database as Single Source of Truth**: MySQL enforces relational integrity, foreign key constraints, and transactional consistency. Redis serves purely as a performance accelerator (caching, distributed lock coordination, rate-limiting, and queue broker).
-4. **Auditability & Accountability**: Every action touching Protected Health Information (PHI) or financial balances writes an immutable, append-only record to the `audit_logs` table.
+1. **Defense-in-Depth Data Isolation**: Tenant isolation cannot rely on a single software layer. It is enforced across multiple tiers: domain-level middleware, an automated Eloquent Global Scope, CI architecture validation, and composite database constraints.
+2. **Strict PHI & Demographics Segregation**: Personal demographic data (name, phone) is separated at the schema level from sensitive clinical records (allergies, conditions, vitals, diagnoses) to enforce role-based access physically, not just conceptually.
+3. **Monolithic Simplicity with Livewire 3**: No complex decoupled SPA overhead. High-fidelity, reactive user interfaces are built with Laravel Blade, Livewire 3, Alpine.js, and Tailwind CSS.
+4. **Dual-Layer Encryption & GDPR Compliance**: Database tables use MySQL InnoDB Transparent Data Encryption (TDE) at rest, supplemented by application-level encrypted field casts for sensitive clinical notes. GDPR Right-to-Erasure is supported via a cryptographically irreversible anonymization engine.
 
 ---
 
-# 2. Multi-Tenancy Engine & Isolation Architecture
+# 2. Multi-Tenancy Engine & Defense-in-Depth Isolation
 
 ### 2.1 Tenancy Strategy: Shared Database / Shared Schema
-To maximize resource efficiency, minimize operational maintenance, and simplify cross-tenant migrations, the system utilizes a **Shared Database with Tenant Discriminator Columns (`tenant_id`)**.
-
-Every tenant-scoped table contains an unsigned foreign key `tenant_id` indexed with foreign key cascading constraints to the `tenants` table.
+The system utilizes a **Shared Database with Tenant Discriminator Columns (`tenant_id`)**. Every tenant-owned table stores an indexed foreign key `tenant_id` linked to the `tenants` table.
 
 ### 2.2 Tenant Identification & Resolution Pipeline
-Incoming HTTP requests pass through the following strict resolution middleware pipeline:
+Incoming HTTP requests pass through the following strict resolution middleware:
 
 ```
 [ Incoming Request: tenant1.medihms.test/appointments ]
                       │
                       ▼
-[ Step 1: Subdomain Detection Middleware (IdentifyTenantBySubdomain) ]
-  - Parse host: extract "tenant1"
-  - Query Tenant::where('subdomain', 'tenant1')->where('status', 'ACTIVE')->firstOrFail()
-  - If root domain or "admin", mark request as Platform Context.
+[ Step 1: Subdomain / Custom Domain Resolution ]
+  - Parse host: extract subdomain or match custom_domain
+  - Query Tenant::where('subdomain', $subdomain)->where('status', 'ACTIVE')->firstOrFail()
+  - If root domain or "admin", mark request as Platform Admin Context.
                       │
                       ▼
-[ Step 2: Set Tenant Context Singleton ]
+[ Step 2: Tenant Context Singleton & DB Session Binding ]
   - Bind resolved tenant into app(TenantManager::class)->setTenant($tenant)
-  - Configure dynamic runtime settings (timezone, currency, default branding)
+  - Execute DB::statement("SET @current_tenant_id = ?", [$tenant->id]) for database-level tracking
                       │
                       ▼
 [ Step 3: Authenticate User & Validate Membership ]
-  - Verify auth()->user()->tenant_id === $tenant->id
-  - Reject access with HTTP 403 if user does not belong to the resolved tenant
+  - Verify auth()->user()->tenant_id === $tenant->id (Platform admins have tenant_id = NULL)
+  - Abort with HTTP 403 if user does not belong to the target tenant
                       │
                       ▼
-[ Step 4: Apply Eloquent Global Scope ]
-  - TenantScope intercepts all Eloquent queries: $query->where('tenant_id', $tenant->id)
-  - Automatically populate $model->tenant_id = $tenant->id on model creation
+[ Step 4: Eloquent Global Scope Injection ]
+  - BelongsToTenant trait automatically injects where('tenant_id', $tenant->id)
+  - Automatically sets $model->tenant_id = $tenant->id on model creation
 ```
 
-### 2.3 `BelongsToTenant` Model Trait Implementation
-Every model owned by a hospital must utilize the `App\Models\Concerns\BelongsToTenant` trait:
+### 2.3 Defense-in-Depth (Mitigating Single Point of Failure)
+Relying solely on an Eloquent global scope creates a single point of failure (raw SQL, console commands, or a model that omits the trait could leak data). The architecture counters this with **three additional safety nets**:
 
-* **Global Scope**: Automatically adds `builder->where($table . '.tenant_id', app(TenantManager::class)->getTenantId())`.
-* **Creation Hook**: In `static::creating()`, if `tenant_id` is not explicitly set, it automatically injects `app(TenantManager::class)->getTenantId()`.
-* **Foreign Key Protection**: Throws a `SecurityException` if an attempt is made to update `tenant_id` after creation.
-
-### 2.4 Super Admin Context Switching
-Platform super administrators (`users.tenant_id = NULL` with `role = platform_admin`) have isolated access to the SaaS Control Panel (`admin.medihms.test`).
-* Super admins can impersonate a tenant for support purposes.
-* Impersonation generates an explicit audit log entry (`action: SUPER_ADMIN_IMPERSONATE_START`).
-* Access to clinical records (PHI) during impersonation is masked unless an explicit break-glass reason is entered and logged.
+1. **Automated Architectural CI Tests (Pest Arch / PHPStan)**:
+   * A continuous integration check scans all models in `app/Models/Tenant/`.
+   * **Rule**: If a model extends `Illuminate\Database\Eloquent\Model` and is not explicitly whitelisted as a platform-level model, the build **fails** if it does not use the `BelongsToTenant` trait and the `SoftDeletes` trait.
+2. **Database Composite Unique Constraints**:
+   * All business keys (e.g. `patient_number`, `invoice_number`, `order_number`) use composite unique keys prefixed with `tenant_id` (`UNIQUE(tenant_id, patient_number)`). Cross-tenant collisions or accidental cross-inserts violate database constraints immediately.
+3. **Automated Route-Model Binding Scoping**:
+   * Laravel 11 scoped bindings (`/tenants/{tenant:subdomain}/patients/{patient:uuid}`) verify that the queried entity's `tenant_id` strictly matches the route's tenant context before reaching controller actions.
 
 ---
 
 # 3. Frontend Architecture: Blade + Livewire 3
 
-The user interface avoids the complexity and deployment friction of decoupled SPAs (Vue/React/Next.js) by using **Laravel Blade + Livewire 3 + Alpine.js + Tailwind CSS**.
+The user interface utilizes **Laravel Blade + Livewire 3 + Alpine.js + Tailwind CSS**, avoiding decoupled SPA complexity.
 
 ### 3.1 Stack Composition
-* **Livewire 3**: Handles reactive UI state, real-time input validation, dynamic form fields, asynchronous pagination, modals, and event emission.
-* **Alpine.js**: Handles lightweight client-side interactions (dropdowns, off-canvas drawers, tab switches, tooltips, local date formatters) without making roundtrips to the server.
-* **Tailwind CSS**: Modern, utility-first design system customized with hospital color palettes (slate, clinical teal, emerald, amber, and crimson).
+* **Livewire 3**: Handles reactive UI state, real-time input validation, dynamic form fields, asynchronous pagination, modals, and event dispatch.
+* **Alpine.js**: Handles lightweight client-side state (dropdowns, fly-out drawers, tab switches, tooltips, local date formatters) without server round-trips.
+* **Tailwind CSS**: Medical palette (slate, clinical teal, emerald, amber, and crimson).
 * **WireUI / Lucide Icons**: High-contrast, clean medical icons for clinical clarity.
 
 ### 3.2 Layout Hierarchy
-1. `layouts.app`: Main authenticated wrapper for hospital staff.
-   * Responsive collapsible sidebar with role-aware navigation links.
-   * Top navigation bar with global patient quick-search (`Cmd+K`), active tenant indicator, notification center, and user profile drawer.
-   * Main content area with breadcrumbs, page actions, and flash notification toasts.
-2. `layouts.admin`: Dedicated platform administration layout for managing SaaS tenants, billing, and system health.
-3. `layouts.guest`: Clean, centered layout for authentication (login, 2FA challenge, password reset).
-4. `layouts.print`: Minimalist, print-optimized stylesheet layout for patient prescriptions, diagnostic reports, lab slips, and billing invoices.
+1. `layouts.app`: Main authenticated wrapper for hospital staff with role-aware sidebar navigation, global patient search (`Cmd+K`), active tenant indicator, notification center, and flash toasts.
+2. `layouts.admin`: Platform administration layout for SaaS subscriptions, tenant onboarding, and infrastructure health.
+3. `layouts.guest`: Clean layout for authentication (login, 2FA challenge, password reset).
+4. `layouts.print`: Print-optimized layout for patient prescriptions, diagnostic reports, and billing invoices.
 
 ---
 
 # 4. Exhaustive Database Schema & Data Dictionary
 
-All tables are created using the `utf8mb4_unicode_ci` character set on MySQL 8.0+. Primary keys are `BIGINT UNSIGNED AUTO_INCREMENT` (with corresponding UUIDs for external API exposure).
+All tables run on MySQL 8.0+ with InnoDB and Transparent Data Encryption (TDE). All soft-deletable tables include `deleted_at TIMESTAMP NULL`.
 
 ---
 
@@ -152,21 +156,22 @@ All tables are created using the `utf8mb4_unicode_ci` character set on MySQL 8.0
 #### `tenants`
 | Column | Type | Constraints | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Internal unique identifier |
-| `uuid` | CHAR(36) | UNIQUE | No | | External UUIDv4 identifier |
-| `name` | VARCHAR(191) | | No | | Legal hospital/organization name |
-| `subdomain` | VARCHAR(64) | UNIQUE | No | | Unique subdomain (e.g. `mercy-general`) |
-| `custom_domain` | VARCHAR(191) | UNIQUE | Yes | NULL | Optional custom CNAME domain |
+| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Internal identifier |
+| `uuid` | CHAR(36) | UNIQUE | No | | Public UUIDv4 |
+| `name` | VARCHAR(191) | | No | | Legal hospital name |
+| `subdomain` | VARCHAR(64) | UNIQUE | No | | e.g. `mercy-general` |
+| `custom_domain` | VARCHAR(191) | UNIQUE | Yes | NULL | Custom CNAME domain |
+| `ssl_status` | ENUM | 'PENDING','PROVISIONED','FAILED' | No | 'PENDING' | Automated SSL state |
 | `email` | VARCHAR(191) | | No | | Hospital contact email |
-| `phone` | VARCHAR(32) | | No | | Hospital emergency/reception phone |
+| `phone` | VARCHAR(32) | | No | | Hospital reception phone |
 | `address` | TEXT | | Yes | NULL | Physical address |
-| `timezone` | VARCHAR(64) | | No | 'UTC' | Hospital timezone for scheduling |
-| `currency_code` | CHAR(3) | | No | 'USD' | 3-letter ISO currency code |
-| `status` | ENUM | 'ACTIVE','SUSPENDED','INACTIVE' | No | 'ACTIVE' | Tenant operational status |
-| `subscription_plan`| VARCHAR(64) | | No | 'STANDARD' | SaaS tier (BASIC, STANDARD, ENTERPRISE) |
-| `logo_path` | VARCHAR(255) | | Yes | NULL | Storage path for hospital brand logo |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Record creation timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Record update timestamp |
+| `timezone` | VARCHAR(64) | | No | 'UTC' | Hospital timezone |
+| `currency_code` | CHAR(3) | | No | 'USD' | ISO currency code |
+| `status` | ENUM | 'ACTIVE','SUSPENDED','INACTIVE' | No | 'ACTIVE' | Operational status |
+| `logo_path` | VARCHAR(255) | | Yes | NULL | Storage path for brand logo |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Created timestamp |
+| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Updated timestamp |
+| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
 
 #### `tenant_settings`
 | Column | Type | Constraints | Nullable | Default | Description |
@@ -174,126 +179,143 @@ All tables are created using the `utf8mb4_unicode_ci` character set on MySQL 8.0
 | `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
 | `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
 | `key` | VARCHAR(64) | | No | | Configuration key name |
-| `value` | JSON | | Yes | NULL | Serialized setting value |
+| `value` | JSON | | Yes | NULL | Setting payload |
 | `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
 | `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
 *Indexes: UNIQUE(`tenant_id`, `key`)*
 
 #### `users`
+*Fixes the MySQL NULL-in-unique-index limitation for Platform Admins via a virtual generated column.*
+
 | Column | Type | Constraints | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Internal user ID |
 | `uuid` | CHAR(36) | UNIQUE | No | | External UUIDv4 |
 | `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | Yes | NULL | NULL for platform admins |
-| `name` | VARCHAR(191) | | No | | Full legal name |
-| `email` | VARCHAR(191) | | No | | Email address (unique per tenant) |
+| `tenant_scope_key`| BIGINT UNSIGNED | GENERATED ALWAYS AS (COALESCE(tenant_id, 0)) STORED | No | 0 | Virtual column for indexing |
+| `name` | VARCHAR(191) | | No | | Full name |
+| `email` | VARCHAR(191) | | No | | User login email |
 | `password` | VARCHAR(255) | | No | | Bcrypt hashed password |
-| `phone` | VARCHAR(32) | | Yes | NULL | Contact phone number |
-| `status` | ENUM | 'ACTIVE','INVITED','DEACTIVATED'| No | 'ACTIVE' | User account state |
+| `phone` | VARCHAR(32) | | Yes | NULL | Contact phone |
+| `status` | ENUM | 'ACTIVE','INVITED','DEACTIVATED' | No | 'ACTIVE' | Account state |
 | `email_verified_at`| TIMESTAMP | | Yes | NULL | Email verification time |
-| `two_factor_secret`| TEXT | | Yes | NULL | 2FA TOTP secret |
-| `last_login_at` | TIMESTAMP | | Yes | NULL | Last successful authentication |
+| `two_factor_secret`| TEXT | Encrypted at rest (`casts => encrypted`) | Yes | NULL | 2FA TOTP secret |
+| `last_login_at` | TIMESTAMP | | Yes | NULL | Last authentication |
 | `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
 | `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `email`)*
-
-#### `roles` & `permissions` (RBAC)
-* `roles`: `id`, `tenant_id` (NULL for system roles), `name`, `guard_name`, `description`, timestamps. *UNIQUE(`tenant_id`, `name`)*.
-* `permissions`: `id`, `name`, `guard_name`, `group_name`, timestamps. *UNIQUE(`name`, `guard_name`)*.
-* `model_has_roles`: `role_id`, `model_type`, `model_id`, `tenant_id`.
-* `role_has_permissions`: `permission_id`, `role_id`.
+| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
+*Indexes: UNIQUE(`tenant_scope_key`, `email`)*
 
 ---
 
-### 4.2 Hospital Structure & Clinical Staff
+### 4.2 Platform B2B SaaS Subscriptions & Metering
+
+#### `platform_plans`
+| Column | Type | Constraints | Nullable | Default | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Plan ID |
+| `code` | VARCHAR(32) | UNIQUE | No | | e.g., 'BASIC', 'PRO', 'ENTERPRISE' |
+| `name` | VARCHAR(100) | | No | | Display name |
+| `price_monthly` | DECIMAL(10,2) | | No | 0.00 | Monthly subscription price |
+| `max_doctors` | SMALLINT UNSIGNED| | No | 10 | Doctor seat ceiling |
+| `max_beds` | SMALLINT UNSIGNED| | No | 25 | Inpatient bed ceiling |
+| `has_pharmacy` | BOOLEAN | | No | TRUE | Feature flag |
+| `has_lab` | BOOLEAN | | No | TRUE | Feature flag |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+
+#### `platform_subscriptions`
+| Column | Type | Constraints | Nullable | Default | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Subscription ID |
+| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Target hospital tenant |
+| `plan_id` | BIGINT UNSIGNED | FK -> platform_plans(id) | No | | Active SaaS plan |
+| `stripe_customer_id`| VARCHAR(128)| | Yes | NULL | Stripe Customer reference |
+| `stripe_subscription_id`| VARCHAR(128)| UNIQUE | Yes | NULL | Stripe Subscription reference |
+| `status` | ENUM | 'ACTIVE','TRIALING','PAST_DUE','CANCELED' | No | 'ACTIVE' | Subscription status |
+| `current_period_start`| DATETIME | | No | | Start of billing cycle |
+| `current_period_end` | DATETIME | | No | | End of billing cycle |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+*Indexes: INDEX(`tenant_id`, `status`)*
+
+#### `tenant_usage_metering`
+| Column | Type | Constraints | Nullable | Default | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Metering log ID |
+| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant |
+| `recorded_at` | DATE | | No | | Snapshot date |
+| `active_doctors_count`| SMALLINT UNSIGNED| | No | 0 | Seat utilization |
+| `active_beds_count`| SMALLINT UNSIGNED| | No | 0 | Bed capacity utilization |
+| `storage_bytes_used`| BIGINT UNSIGNED | | No | 0 | S3/MinIO consumption |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+*Indexes: UNIQUE(`tenant_id`, `recorded_at`)*
+
+---
+
+### 4.3 Hospital Structure & Clinical Staff
 
 #### `departments`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Department ID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
-| `name` | VARCHAR(191) | | No | | e.g., 'Cardiology', 'Pediatrics' |
-| `code` | VARCHAR(32) | | No | | Short code, e.g. 'CARD' |
-| `description` | TEXT | | Yes | NULL | Scope of department |
-| `head_doctor_id` | BIGINT UNSIGNED | | Yes | NULL | Reference to head doctor |
-| `status` | ENUM | 'ACTIVE','INACTIVE' | No | 'ACTIVE' | Operational status |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `code`)*
+* `id`, `tenant_id`, `name`, `code`, `description`, `head_doctor_id`, `status` ('ACTIVE','INACTIVE'), `created_at`, `updated_at`, `deleted_at`.
+* *Indexes: UNIQUE(`tenant_id`, `code`), FK -> tenants(id)*
 
 #### `doctors`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Doctor profile ID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
-| `user_id` | BIGINT UNSIGNED | FK -> users(id) ON DELETE CASCADE | No | | User login account |
-| `department_id` | BIGINT UNSIGNED | FK -> departments(id) ON DELETE RESTRICT | No | | Primary clinical department |
-| `license_number` | VARCHAR(64) | | No | | Medical council license number |
-| `specialization` | VARCHAR(191) | | No | | Clinical specialty |
-| `qualification` | VARCHAR(191) | | No | | e.g. 'MD, MBBS, FACS' |
-| `consultation_fee`| DECIMAL(10,2) | | No | 0.00 | Standard outpatient fee |
-| `slot_duration_mins`| SMALLINT UNSIGNED| | No | 15 | Default appointment duration |
-| `bio` | TEXT | | Yes | NULL | Doctor biographical summary |
-| `status` | ENUM | 'ACTIVE','ON_LEAVE','RESIGNED' | No | 'ACTIVE' | Employment status |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `user_id`), UNIQUE(`tenant_id`, `license_number`)*
+* `id`, `tenant_id`, `user_id`, `department_id`, `license_number`, `specialization`, `qualification`, `consultation_fee`, `slot_duration_mins` (default 15), `bio`, `status` ('ACTIVE','ON_LEAVE','RESIGNED'), `created_at`, `updated_at`, `deleted_at`.
+* *Indexes: UNIQUE(`tenant_id`, `user_id`), UNIQUE(`tenant_id`, `license_number`), FK -> departments(id)*
 
-#### `doctor_schedules` (Weekly Recurring Availability)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Schedule ID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE CASCADE | No | | Doctor reference |
-| `day_of_week` | TINYINT UNSIGNED | 0 (Sun) - 6 (Sat) | No | | Day of week |
-| `start_time` | TIME | | No | | Consultation start time |
-| `end_time` | TIME | | No | | Consultation end time |
-| `break_start_time`| TIME | | Yes | NULL | Optional break start |
-| `break_end_time` | TIME | | Yes | NULL | Optional break end |
-| `max_patients` | SMALLINT UNSIGNED| | Yes | NULL | Patient booking ceiling |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: INDEX(`tenant_id`, `doctor_id`, `day_of_week`)*
+#### `doctor_schedules` (Weekly Availability)
+* `id`, `tenant_id`, `doctor_id`, `day_of_week` (0-6), `start_time`, `end_time`, `break_start_time`, `break_end_time`, `max_patients`, `created_at`, `updated_at`.
+* *Indexes: INDEX(`tenant_id`, `doctor_id`, `day_of_week`)*
 
-#### `doctor_leaves` (Exceptions & Holidays)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE CASCADE | No | | Doctor reference |
-| `start_date` | DATE | | No | | Leave start date |
-| `end_date` | DATE | | No | | Leave end date |
-| `reason` | VARCHAR(255) | | Yes | NULL | Reason for absence |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+#### `doctor_leaves`
+* `id`, `tenant_id`, `doctor_id`, `start_date`, `end_date`, `reason`, `created_at`, `updated_at`.
 
 ---
 
-### 4.3 Patients & Clinical History
+### 4.4 Patients & Split Clinical Demographics (PHI)
 
-#### `patients`
+*Patients are divided into two physical tables to decouple non-sensitive demographic data from sensitive clinical PHI.*
+
+#### `patients` (Demographic Layer — Accessible by Reception & Billing)
 | Column | Type | Constraints | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | External UUIDv4 |
+| `uuid` | CHAR(36) | UNIQUE | No | | Public UUIDv4 |
 | `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
 | `patient_number`| VARCHAR(64) | | No | | Human readable (e.g. `HOSP-2026-00012`) |
 | `first_name` | VARCHAR(100) | | No | | First name |
-| `last_name` | VARCHAR(100) | | No | | Last/family name |
+| `last_name` | VARCHAR(100) | | No | | Last name |
 | `date_of_birth` | DATE | | No | | Birth date |
 | `gender` | ENUM | 'MALE','FEMALE','OTHER' | No | | Biological gender |
-| `blood_group` | ENUM | 'A+','A-','B+','B-','AB+','AB-','O+','O-','UNKNOWN' | No | 'UNKNOWN' | Blood type |
-| `phone` | VARCHAR(32) | | No | | Contact telephone |
-| `email` | VARCHAR(191) | | Yes | NULL | Optional contact email |
+| `phone` | VARCHAR(32) | | No | | Contact phone |
+| `email` | VARCHAR(191) | | Yes | NULL | Contact email |
 | `address` | TEXT | | Yes | NULL | Residential address |
-| `national_id` | VARCHAR(64) | Encrypted at rest | Yes | NULL | SSN / National Identity |
-| `emergency_contact_name` | VARCHAR(191) | | Yes | NULL | Kin contact name |
-| `emergency_contact_phone`| VARCHAR(32) | | Yes | NULL | Kin contact number |
-| `allergies` | TEXT | | Yes | NULL | Known drug/food allergies |
-| `chronic_conditions` | TEXT | | Yes | NULL | Ongoing conditions |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Registration timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Profile update timestamp |
+| `emergency_contact_name` | VARCHAR(191) | | Yes | NULL | Kin name |
+| `emergency_contact_phone`| VARCHAR(32) | | Yes | NULL | Kin phone |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
 *Indexes: UNIQUE(`tenant_id`, `patient_number`), INDEX(`tenant_id`, `phone`), INDEX(`tenant_id`, `first_name`, `last_name`)*
+
+#### `patient_clinical_profiles` (Protected Health Information Layer — Doctor & Nurse Access Only)
+| Column | Type | Constraints | Nullable | Default | Description |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
+| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Owning tenant |
+| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE CASCADE | No | | 1-to-1 link to patient demographics |
+| `blood_group` | ENUM | 'A+','A-','B+','B-','AB+','AB-','O+','O-','UNKNOWN' | No | 'UNKNOWN' | Blood classification |
+| `national_id` | VARCHAR(255) | Encrypted at rest (`casts => encrypted`) | Yes | NULL | SSN / National Identity |
+| `allergies` | TEXT | Encrypted at rest (`casts => encrypted`) | Yes | NULL | Known drug/food allergies |
+| `chronic_conditions` | TEXT | Encrypted at rest (`casts => encrypted`) | Yes | NULL | Ongoing clinical conditions |
+| `immunization_notes` | TEXT | Encrypted at rest (`casts => encrypted`) | Yes | NULL | Vaccine records |
+| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
+*Indexes: UNIQUE(`tenant_id`, `patient_id`)*
+
+---
+
+### 4.5 Clinical Encounters & Medical Records
 
 #### `appointments`
 | Column | Type | Constraints | Nullable | Default | Description |
@@ -301,8 +323,8 @@ All tables are created using the `utf8mb4_unicode_ci` character set on MySQL 8.0
 | `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
 | `uuid` | CHAR(36) | UNIQUE | No | | Public UUID |
 | `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient being seen |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE RESTRICT | No | | Doctor providing consultation |
+| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
+| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE RESTRICT | No | | Attending doctor |
 | `department_id` | BIGINT UNSIGNED | FK -> departments(id) ON DELETE RESTRICT | No | | Clinical department |
 | `appointment_date`| DATE | | No | | Scheduled date |
 | `start_time` | TIME | | No | | Slot start time |
@@ -310,353 +332,73 @@ All tables are created using the `utf8mb4_unicode_ci` character set on MySQL 8.0
 | `type` | ENUM | 'OUTPATIENT','FOLLOW_UP','EMERGENCY'| No | 'OUTPATIENT' | Category of visit |
 | `status` | ENUM | 'SCHEDULED','CONFIRMED','CHECKED_IN','IN_PROGRESS','COMPLETED','CANCELLED','NO_SHOW' | No | 'SCHEDULED' | Appointment lifecycle |
 | `chief_complaint` | TEXT | | Yes | NULL | Initial symptom description |
-| `cancellation_reason`| VARCHAR(255)| | Yes | NULL | Reason if cancelled |
-| `created_by_user_id`| BIGINT UNSIGNED | FK -> users(id) | No | | Staff member who scheduled |
+| `cancellation_reason`| VARCHAR(255)| | Yes | NULL | Cancellation reason |
+| `created_by_user_id`| BIGINT UNSIGNED | FK -> users(id) | No | | Staff who scheduled |
 | `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
 | `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: INDEX(`tenant_id`, `doctor_id`, `appointment_date`, `start_time`), INDEX(`tenant_id`, `patient_id`, `appointment_date`)*
+| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
+*Indexes: INDEX(`tenant_id`, `doctor_id`, `appointment_date`, `start_time`, `end_time`), INDEX(`tenant_id`, `patient_id`)*
 
-#### `visits` (Clinical Encounters)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Encounter ID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE RESTRICT | No | | Attending doctor |
-| `appointment_id` | BIGINT UNSIGNED | FK -> appointments(id) ON DELETE SET NULL | Yes | NULL | Linked appointment |
-| `encounter_date` | DATETIME | | No | CURRENT_TIMESTAMP | Time consultation began |
-| `visit_type` | ENUM | 'OPD','IPD','EMERGENCY' | No | 'OPD' | Encounter context |
-| `clinical_notes` | LONGTEXT | | Yes | NULL | Doctor's subjective/objective notes |
-| `examination` | LONGTEXT | | Yes | NULL | Physical exam findings |
-| `treatment_plan` | LONGTEXT | | Yes | NULL | Prescribed therapeutic plan |
-| `status` | ENUM | 'OPEN','COMPLETED','DISCHARGED' | No | 'OPEN' | Encounter status |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: INDEX(`tenant_id`, `patient_id`), INDEX(`tenant_id`, `encounter_date`)*
+#### `visits` (Encounters)
+* `id`, `tenant_id`, `patient_id`, `doctor_id`, `appointment_id`, `encounter_date`, `visit_type` ('OPD','IPD','EMERGENCY'), `clinical_notes` (Encrypted), `examination` (Encrypted), `treatment_plan` (Encrypted), `status` ('OPEN','COMPLETED','DISCHARGED'), `created_at`, `updated_at`, `deleted_at`.
+* *Indexes: INDEX(`tenant_id`, `patient_id`), INDEX(`tenant_id`, `encounter_date`)*
 
 #### `vitals`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `visit_id` | BIGINT UNSIGNED | FK -> visits(id) ON DELETE CASCADE | No | | Linked clinical visit |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
-| `systolic_bp` | SMALLINT UNSIGNED| | Yes | NULL | mmHg (e.g. 120) |
-| `diastolic_bp` | SMALLINT UNSIGNED| | Yes | NULL | mmHg (e.g. 80) |
-| `heart_rate` | SMALLINT UNSIGNED| | Yes | NULL | Beats per minute |
-| `respiratory_rate`| SMALLINT UNSIGNED| | Yes | NULL | Breaths per minute |
-| `temperature_c` | DECIMAL(4,2) | | Yes | NULL | Celsius |
-| `oxygen_saturation`| DECIMAL(4,1) | | Yes | NULL | SpO2 percentage (e.g. 98.5) |
-| `weight_kg` | DECIMAL(5,2) | | Yes | NULL | Body weight in kilograms |
-| `height_cm` | DECIMAL(5,2) | | Yes | NULL | Height in centimeters |
-| `bmi` | DECIMAL(4,1) | | Yes | NULL | Body Mass Index (calculated) |
-| `recorded_by_user_id`| BIGINT UNSIGNED | FK -> users(id) | No | | Staff / Nurse recorder |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Measurement timestamp |
+* `id`, `tenant_id`, `visit_id`, `patient_id`, `systolic_bp`, `diastolic_bp`, `heart_rate`, `respiratory_rate`, `temperature_c`, `oxygen_saturation`, `weight_kg`, `height_cm`, `bmi`, `recorded_by_user_id`, `created_at`.
 
 #### `diagnoses`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `visit_id` | BIGINT UNSIGNED | FK -> visits(id) ON DELETE CASCADE | No | | Linked clinical visit |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
-| `icd10_code` | VARCHAR(16) | | Yes | NULL | Standard ICD-10 code (e.g. 'I10') |
-| `diagnosis_name`| VARCHAR(255) | | No | | Diagnosis title |
-| `diagnosis_type`| ENUM | 'PROVISIONAL','FINAL','DIFFERENTIAL'| No | 'FINAL' | Classification |
-| `comments` | TEXT | | Yes | NULL | Specific remarks |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+* `id`, `tenant_id`, `visit_id`, `patient_id`, `icd10_code`, `diagnosis_name` (Encrypted), `diagnosis_type` ('PROVISIONAL','FINAL','DIFFERENTIAL'), `comments` (Encrypted), `created_at`.
 
 ---
 
-### 4.4 Pharmacy & Inventory
+### 4.6 Pharmacy & Inventory
 
-#### `medicine_categories`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `name` | VARCHAR(100) | | No | | e.g., 'Antibiotics', 'Analgesics' |
-| `description` | TEXT | | Yes | NULL | Category description |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `name`)*
-
-#### `medicines`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `category_id` | BIGINT UNSIGNED | FK -> medicine_categories(id) | No | | Pharmacology classification |
-| `name` | VARCHAR(191) | | No | | Brand/commercial name |
-| `generic_name` | VARCHAR(191) | | No | | Chemical/generic substance |
-| `dosage_form` | ENUM | 'TABLET','CAPSULE','SYRUP','INJECTION','OINTMENT','DROPS','INHALER' | No | 'TABLET' | Formulation |
-| `strength` | VARCHAR(64) | | No | | e.g. '500mg', '10mg/ml' |
-| `unit` | VARCHAR(32) | | No | 'Pill' | Dispensing unit |
-| `unit_price` | DECIMAL(10,2) | | No | 0.00 | Retail price per unit |
-| `cost_price` | DECIMAL(10,2) | | No | 0.00 | Acquisition cost per unit |
-| `reorder_level` | INT UNSIGNED | | No | 100 | Low-stock alarm threshold |
-| `current_stock` | INT | | No | 0 | Cached total quantity in stock |
-| `status` | ENUM | 'ACTIVE','DISCONTINUED' | No | 'ACTIVE' | Availability status |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `name`, `strength`), INDEX(`tenant_id`, `current_stock`)*
-
-#### `medicine_batches`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Batch record ID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `medicine_id` | BIGINT UNSIGNED | FK -> medicines(id) ON DELETE CASCADE | No | | Linked medicine |
-| `batch_number` | VARCHAR(64) | | No | | Manufacturer batch ID |
-| `expiry_date` | DATE | | No | | Expiration threshold date |
-| `quantity` | INT | | No | | Remaining stock in this batch |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Inward receipt timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Balance update timestamp |
-*Indexes: UNIQUE(`tenant_id`, `medicine_id`, `batch_number`), INDEX(`tenant_id`, `expiry_date`)*
-
-#### `prescriptions`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | Public UUID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `visit_id` | BIGINT UNSIGNED | FK -> visits(id) ON DELETE CASCADE | No | | Clinical visit |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE RESTRICT | No | | Prescribing doctor |
-| `status` | ENUM | 'PENDING','DISPENSED','PARTIALLY_DISPENSED','CANCELLED' | No | 'PENDING' | Dispensation state |
-| `notes` | TEXT | | Yes | NULL | General pharmacist instructions |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Prescription time |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Dispensation time |
-
-#### `prescription_items`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `prescription_id`| BIGINT UNSIGNED| FK -> prescriptions(id) ON DELETE CASCADE | No | | Parent prescription |
-| `medicine_id` | BIGINT UNSIGNED | FK -> medicines(id) ON DELETE RESTRICT | No | | Medicine |
-| `dosage` | VARCHAR(64) | | No | | e.g., '1 Tablet' |
-| `frequency` | VARCHAR(64) | | No | | e.g., 'TDS (3 times a day)' |
-| `duration_days` | SMALLINT UNSIGNED| | No | | e.g., 5 |
-| `quantity` | INT UNSIGNED | | No | | Total units to dispense |
-| `instructions` | VARCHAR(255) | | Yes | NULL | e.g., 'After food' |
-| `dispensed_quantity`| INT UNSIGNED | | No | 0 | Units handed to patient |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Creation timestamp |
-
-#### `inventory_transactions` (Immutable Audit Ledger)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `medicine_id` | BIGINT UNSIGNED | FK -> medicines(id) ON DELETE RESTRICT | No | | Medicine |
-| `batch_id` | BIGINT UNSIGNED | FK -> medicine_batches(id) | Yes | NULL | Specific batch |
-| `transaction_type`| ENUM | 'PURCHASE_RECEIPT','DISPENSE','RETURN','ADJUSTMENT_LOSS','EXPIRED' | No | | Movement reason |
-| `quantity` | INT | Positive (In) / Negative (Out) | No | | Stock delta |
-| `balance_after` | INT | | No | | Running stock balance |
-| `reference_type`| VARCHAR(64) | | Yes | NULL | e.g. 'Prescription', 'PO' |
-| `reference_id` | BIGINT UNSIGNED | | Yes | NULL | Linked entity ID |
-| `performed_by_user_id`| BIGINT UNSIGNED| FK -> users(id) | No | | Pharmacist/Admin |
-| `remarks` | VARCHAR(255) | | Yes | NULL | Justification for movement |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
+* `medicine_categories`: `id`, `tenant_id`, `name`, `description`, `created_at`, `updated_at`. *UNIQUE(`tenant_id`, `name`)*
+* `medicines`: `id`, `tenant_id`, `category_id`, `name`, `generic_name`, `dosage_form`, `strength`, `unit`, `unit_price`, `cost_price`, `reorder_level`, `current_stock`, `status`, `created_at`, `updated_at`, `deleted_at`.
+* `medicine_batches`: `id`, `tenant_id`, `medicine_id`, `batch_number`, `expiry_date`, `quantity`, `created_at`, `updated_at`. *UNIQUE(`tenant_id`, `medicine_id`, `batch_number`)*
+* `prescriptions`: `id`, `uuid`, `tenant_id`, `visit_id`, `patient_id`, `doctor_id`, `status` ('PENDING','DISPENSED','PARTIALLY_DISPENSED','CANCELLED'), `notes`, `created_at`, `updated_at`, `deleted_at`.
+* `prescription_items`: `id`, `tenant_id`, `prescription_id`, `medicine_id`, `dosage`, `frequency`, `duration_days`, `quantity`, `instructions`, `dispensed_quantity`, `created_at`.
+* `inventory_transactions`: `id`, `tenant_id`, `medicine_id`, `batch_id`, `transaction_type` ('PURCHASE_RECEIPT','DISPENSE','RETURN','ADJUSTMENT_LOSS','EXPIRED'), `quantity`, `balance_after`, `reference_type`, `reference_id`, `performed_by_user_id`, `remarks`, `created_at`.
 
 ---
 
-### 4.5 Diagnostic Laboratory
+### 4.7 Diagnostic Laboratory
 
-#### `lab_test_types` (Test Catalog)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `code` | VARCHAR(32) | | No | | e.g. 'CBC', 'LIPID' |
-| `name` | VARCHAR(191) | | No | | Complete Blood Count |
-| `category` | VARCHAR(64) | | No | 'HAEMATOLOGY'| Lab section |
-| `sample_type` | VARCHAR(64) | | No | 'Whole Blood' | Specimen required |
-| `price` | DECIMAL(10,2) | | No | 0.00 | Standard charge |
-| `reference_range`| TEXT | | Yes | NULL | Normal biological intervals |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `code`)*
-
-#### `lab_orders`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | Public UUID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `visit_id` | BIGINT UNSIGNED | FK -> visits(id) ON DELETE CASCADE | No | | Clinical visit |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Patient |
-| `doctor_id` | BIGINT UNSIGNED | FK -> doctors(id) ON DELETE RESTRICT | No | | Requesting physician |
-| `test_type_id` | BIGINT UNSIGNED | FK -> lab_test_types(id) | No | | Ordered investigation |
-| `order_number` | VARCHAR(64) | | No | | Human readable barcode |
-| `status` | ENUM | 'ORDERED','SAMPLE_COLLECTED','PROCESSING','COMPLETED','CANCELLED' | No | 'ORDERED' | Operational lifecycle |
-| `clinical_notes` | TEXT | | Yes | NULL | Indication for testing |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Ordering timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Lifecycle update |
-*Indexes: UNIQUE(`tenant_id`, `order_number`), INDEX(`tenant_id`, `status`)*
-
-#### `lab_results`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `lab_order_id` | BIGINT UNSIGNED | FK -> lab_orders(id) ON DELETE CASCADE | No | | Linked order |
-| `result_data` | JSON | | No | | Structured parameters & values |
-| `summary` | TEXT | | Yes | NULL | Pathologist interpretation |
-| `is_abnormal` | BOOLEAN | | No | FALSE | Critical flag indicator |
-| `file_attachment_path`| VARCHAR(255)| | Yes | NULL | S3/MinIO PDF report path |
-| `verified_by_user_id`| BIGINT UNSIGNED| FK -> users(id) | Yes | NULL | Lab supervisor/pathologist |
-| `verified_at` | TIMESTAMP | | Yes | NULL | Authorization timestamp |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Result entry timestamp |
+* `lab_test_types`: `id`, `tenant_id`, `code`, `name`, `category`, `sample_type`, `price`, `reference_range`, `created_at`, `updated_at`. *UNIQUE(`tenant_id`, `code`)*
+* `lab_orders`: `id`, `uuid`, `tenant_id`, `visit_id`, `patient_id`, `doctor_id`, `test_type_id`, `order_number`, `status` ('ORDERED','SAMPLE_COLLECTED','PROCESSING','COMPLETED','CANCELLED'), `clinical_notes`, `created_at`, `updated_at`, `deleted_at`.
+* `lab_results`: `id`, `tenant_id`, `lab_order_id`, `result_data` (JSON), `summary`, `is_abnormal`, `file_attachment_path`, `verified_by_user_id`, `verified_at`, `created_at`.
 
 ---
 
-### 4.6 Inpatient (IPD) & Bed Management
+### 4.8 Inpatient (IPD) & Bed Management
 
-#### `wards`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `name` | VARCHAR(100) | | No | | e.g. 'ICU', 'Maternity Ward' |
-| `gender` | ENUM | 'MALE','FEMALE','MIXED' | No | 'MIXED' | Occupancy segregation |
-| `capacity` | SMALLINT UNSIGNED| | No | 0 | Total beds |
-| `status` | ENUM | 'ACTIVE','CLOSED' | No | 'ACTIVE' | Ward status |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `name`)*
-
-#### `rooms`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `ward_id` | BIGINT UNSIGNED | FK -> wards(id) ON DELETE CASCADE | No | | Parent ward |
-| `room_number` | VARCHAR(32) | | No | | e.g., '101-A' |
-| `type` | ENUM | 'GENERAL','SEMI_PRIVATE','PRIVATE','ISOLATION','ICU' | No | 'GENERAL' | Room comfort tier |
-| `rate_per_day` | DECIMAL(10,2) | | No | 0.00 | Daily billing rate |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `room_number`)*
-
-#### `beds`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `room_id` | BIGINT UNSIGNED | FK -> rooms(id) ON DELETE CASCADE | No | | Parent room |
-| `bed_number` | VARCHAR(32) | | No | | e.g., 'BED-01' |
-| `status` | ENUM | 'AVAILABLE','OCCUPIED','MAINTENANCE','RESERVED' | No | 'AVAILABLE' | Real-time occupancy state |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `room_id`, `bed_number`), INDEX(`tenant_id`, `status`)*
-
-#### `admissions`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | Public UUID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `admission_number`| VARCHAR(64) | | No | | e.g. `ADM-2026-0045` |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Inpatient |
-| `attending_doctor_id`| BIGINT UNSIGNED| FK -> doctors(id) ON DELETE RESTRICT | No | | Physician in charge |
-| `bed_id` | BIGINT UNSIGNED | FK -> beds(id) ON DELETE RESTRICT | No | | Currently occupied bed |
-| `admission_date` | DATETIME | | No | CURRENT_TIMESTAMP | Entry time |
-| `discharge_date` | DATETIME | | Yes | NULL | Release time |
-| `admission_reason`| TEXT | | No | | Clinical reason for admission |
-| `discharge_summary`| LONGTEXT | | Yes | NULL | Final medical discharge summary |
-| `status` | ENUM | 'ADMITTED','DISCHARGED','TRANSFERRED'| No | 'ADMITTED' | Lifecycle state |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `admission_number`), INDEX(`tenant_id`, `patient_id`, `status`)*
+* `wards`: `id`, `tenant_id`, `name`, `gender`, `capacity`, `status`, `created_at`, `updated_at`.
+* `rooms`: `id`, `tenant_id`, `ward_id`, `room_number`, `type`, `rate_per_day`, `created_at`, `updated_at`.
+* `beds`: `id`, `tenant_id`, `room_id`, `bed_number`, `status` ('AVAILABLE','OCCUPIED','MAINTENANCE','RESERVED'), `created_at`, `updated_at`.
+* `admissions`: `id`, `uuid`, `tenant_id`, `admission_number`, `patient_id`, `attending_doctor_id`, `bed_id`, `admission_date`, `discharge_date`, `admission_reason`, `discharge_summary`, `status` ('ADMITTED','DISCHARGED','TRANSFERRED'), `created_at`, `updated_at`, `deleted_at`.
 
 ---
 
-### 4.7 Billing, Invoicing & Payments
+### 4.9 Hospital Billing, Invoicing & Payments
 
-#### `invoices`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | Public UUID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `invoice_number`| VARCHAR(64) | | No | | e.g., `INV-2026-00194` |
-| `patient_id` | BIGINT UNSIGNED | FK -> patients(id) ON DELETE RESTRICT | No | | Billed patient |
-| `visit_id` | BIGINT UNSIGNED | FK -> visits(id) ON DELETE SET NULL | Yes | NULL | Linked encounter |
-| `admission_id` | BIGINT UNSIGNED | FK -> admissions(id) ON DELETE SET NULL | Yes | NULL | Linked hospital stay |
-| `subtotal` | DECIMAL(12,2) | | No | 0.00 | Sum of items before deductions |
-| `discount_amount`| DECIMAL(12,2)| | No | 0.00 | Concessions / discounts |
-| `tax_amount` | DECIMAL(12,2) | | No | 0.00 | Applicable VAT/Sales tax |
-| `total_amount` | DECIMAL(12,2) | | No | 0.00 | Final payable sum |
-| `paid_amount` | DECIMAL(12,2) | | No | 0.00 | Aggregated receipts |
-| `balance_due` | DECIMAL(12,2) | | No | 0.00 | Outstanding liability |
-| `status` | ENUM | 'DRAFT','ISSUED','PARTIALLY_PAID','PAID','CANCELLED','REFUNDED' | No | 'ISSUED' | Financial state |
-| `due_date` | DATE | | Yes | NULL | Payment deadline |
-| `created_by_user_id`| BIGINT UNSIGNED| FK -> users(id) | No | | Billing clerk |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Invoice issuance date |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Ledger update |
-*Indexes: UNIQUE(`tenant_id`, `invoice_number`), INDEX(`tenant_id`, `patient_id`, `status`)*
-
-#### `invoice_items`
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `invoice_id` | BIGINT UNSIGNED | FK -> invoices(id) ON DELETE CASCADE | No | | Parent invoice |
-| `item_type` | ENUM | 'CONSULTATION','MEDICINE','LAB_TEST','BED_CHARGE','PROCEDURE','OTHER' | No | | Charge classification |
-| `description` | VARCHAR(255) | | No | | Line item label |
-| `quantity` | DECIMAL(8,2) | | No | 1.00 | Units billed |
-| `unit_price` | DECIMAL(10,2) | | No | 0.00 | Price per unit |
-| `total_price` | DECIMAL(12,2) | | No | 0.00 | quantity * unit_price |
-| `reference_type`| VARCHAR(64) | | Yes | NULL | e.g., 'App\Models\LabOrder' |
-| `reference_id` | BIGINT UNSIGNED | | Yes | NULL | Polymorphic reference ID |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-
-#### `payments` (Receipts)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Primary key |
-| `uuid` | CHAR(36) | UNIQUE | No | | Public receipt UUID |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | No | | Tenant owner |
-| `payment_number`| VARCHAR(64) | | No | | e.g. `REC-2026-00088` |
-| `invoice_id` | BIGINT UNSIGNED | FK -> invoices(id) ON DELETE RESTRICT | No | | Target invoice |
-| `amount` | DECIMAL(12,2) | | No | 0.00 | Monetary amount collected |
-| `payment_method`| ENUM | 'CASH','CREDIT_CARD','DEBIT_CARD','BANK_TRANSFER','STRIPE','MOBILE_PAYMENT' | No | 'CASH' | Payment vehicle |
-| `transaction_reference`| VARCHAR(128)| | Yes | NULL | External bank / Stripe transaction ID |
-| `idempotency_key`| VARCHAR(128)| UNIQUE | Yes | NULL | Prevents duplicate charge submission |
-| `received_by_user_id`| BIGINT UNSIGNED| FK -> users(id) | No | | Cashier / Collector |
-| `payment_date` | DATETIME | | No | CURRENT_TIMESTAMP | Time of collection |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-*Indexes: UNIQUE(`tenant_id`, `payment_number`), INDEX(`tenant_id`, `invoice_id`)*
+* `invoices`: `id`, `uuid`, `tenant_id`, `invoice_number`, `patient_id`, `visit_id`, `admission_id`, `subtotal`, `discount_amount`, `tax_amount`, `total_amount`, `paid_amount`, `balance_due`, `status` ('DRAFT','ISSUED','PARTIALLY_PAID','PAID','CANCELLED','REFUNDED'), `due_date`, `created_by_user_id`, `created_at`, `updated_at`, `deleted_at`.
+* `invoice_items`: `id`, `tenant_id`, `invoice_id`, `item_type`, `description`, `quantity`, `unit_price`, `total_price`, `reference_type`, `reference_id`, `created_at`.
+* `payments`: `id`, `uuid`, `tenant_id`, `payment_number`, `invoice_id`, `amount`, `payment_method` ('CASH','CREDIT_CARD','DEBIT_CARD','BANK_TRANSFER','STRIPE','MOBILE_PAYMENT'), `transaction_reference`, `idempotency_key` (UNIQUE), `received_by_user_id`, `payment_date`, `created_at`.
 
 ---
 
-### 4.8 Audit Logs & Security
+### 4.10 Audit Logs & Security
 
 #### `audit_logs` (Append-Only Event Log)
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Log ID |
-| `tenant_id` | BIGINT UNSIGNED | | Yes | NULL | Tenant context (NULL for platform operations) |
-| `user_id` | BIGINT UNSIGNED | | Yes | NULL | User who triggered the action |
-| `action` | VARCHAR(64) | | No | | e.g., 'VIEW_PHI', 'CREATE_PATIENT', 'DISPENSE_MEDICINE' |
-| `entity_type` | VARCHAR(100) | | No | | Target model class (e.g. `App\Models\Patient`) |
-| `entity_id` | BIGINT UNSIGNED | | Yes | NULL | Target model primary key |
-| `old_values` | JSON | | Yes | NULL | State snapshot prior to update |
-| `new_values` | JSON | | Yes | NULL | State snapshot after update |
-| `ip_address` | VARCHAR(45) | | Yes | NULL | IPv4 or IPv6 client origin |
-| `user_agent` | VARCHAR(255) | | Yes | NULL | Client browser agent string |
-| `created_at` | TIMESTAMP | | No | CURRENT_TIMESTAMP | Exact immutable event timestamp |
-*Indexes: INDEX(`tenant_id`, `action`, `created_at`), INDEX(`tenant_id`, `user_id`, `created_at`), INDEX(`entity_type`, `entity_id`)*
+* `id`, `tenant_id`, `user_id`, `action`, `entity_type`, `entity_id`, `old_values` (JSON), `new_values` (JSON), `ip_address`, `user_agent`, `created_at`.
+* *Indexes: INDEX(`tenant_id`, `action`, `created_at`), INDEX(`tenant_id`, `user_id`, `created_at`), INDEX(`entity_type`, `entity_id`)*
 
 ---
 
 # 5. Role-Based Access Control (RBAC) Matrix
 
-Permissions are granular actions assigned to roles. Roles are assigned to users within a tenant.
-
 ### 5.1 Comprehensive Permission Catalog
-* **Patient Operations**: `patient.view_basic`, `patient.view_phi`, `patient.create`, `patient.edit`, `patient.delete`
+* **Patient Operations**: `patient.view_basic` (demographics), `patient.view_phi` (clinical history & vitals), `patient.create`, `patient.edit`, `patient.anonymize`
 * **Scheduling**: `appointment.view`, `appointment.create`, `appointment.reschedule`, `appointment.cancel`
 * **Clinical Encounters**: `visit.create`, `visit.edit_notes`, `diagnosis.create`, `vitals.record`
 * **Prescriptions**: `prescription.create`, `prescription.view`, `prescription.dispense`
@@ -673,9 +415,8 @@ Permissions are granular actions assigned to roles. Roles are assigned to users 
 | `patient.view_basic` | ❌ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ (Self) |
 | `patient.view_phi` | ❌ (Breakglass) | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ✅ (Self) |
 | `patient.create` | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
-| `patient.edit` | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
+| `patient.anonymize` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `appointment.create`| ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ (Request) |
-| `appointment.reschedule`| ❌ | ✅ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `vitals.record` | ❌ | ❌ | ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ |
 | `visit.create` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `diagnosis.create` | ❌ | ❌ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -689,7 +430,6 @@ Permissions are granular actions assigned to roles. Roles are assigned to users 
 | `ipd.discharge` | ❌ | ✅ | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `billing.create_invoice`| ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
 | `billing.collect_payment`| ❌ | ✅ | ✅ | ❌ | ❌ | ❌ | ❌ | ✅ | ❌ |
-| `billing.apply_discount`| ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ✅ (Limited)| ❌ |
 | `staff.manage` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `tenant.configure` | ❌ | ✅ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
 | `audit.view` | ✅ (Platform) | ✅ (Tenant) | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ | ❌ |
@@ -698,178 +438,92 @@ Permissions are granular actions assigned to roles. Roles are assigned to users 
 
 # 6. Core Business Engines & State Machines
 
-### 6.1 Doctor Availability & Slot Reservation Engine
-Appointments use a conflict-free, high-concurrency booking algorithm backed by Redis locks to prevent double-booking.
+### 6.1 Doctor Availability & Overlapping Slot Reservation Engine
+To prevent double-booking when appointments have varying durations (e.g. 15-minute checkups vs. 45-minute emergency consultations), the booking engine checks for **range overlaps** rather than exact start-time matches.
 
 ```
-[ Incoming Booking Request: Doctor ID, Date, Start Time ]
-                        │
-                        ▼
+[ Incoming Booking Request: Doctor ID, Date, Start Time, End Time ]
+                               │
+                               ▼
 [ Step 1: Check Doctor Leave Exceptions ]
-  - Verify DoctorLeaves does not cover target date
-                        │
-                        ▼
-[ Step 2: Check Weekly Schedule & Slot Boundaries ]
-  - DayOfWeek matches DoctorSchedules table
-  - Requested slot is within [start_time, end_time] and outside [break_start, break_end]
-                        │
-                        ▼
+  - Verify DoctorLeaves does not cover the requested date
+                               │
+                               ▼
+[ Step 2: Check Schedule Bounds ]
+  - DayOfWeek matches DoctorSchedules
+  - Slot falls within [start_time, end_time] and outside [break_start, break_end]
+                               │
+                               ▼
 [ Step 3: Acquire Redis Distributed Lock ]
-  - Key: "lock:slot:{tenant_id}:{doctor_id}:{date}:{start_time}"
+  - Key: "lock:doctor_schedule:{tenant_id}:{doctor_id}:{date}"
   - TTL: 10 seconds
-  - If lock fails: Abort with HTTP 409 ("Slot is currently being reserved by another user")
-                        │
-                        ▼
-[ Step 4: Database Verification Inside DB Transaction ]
-  - SELECT * FROM appointments 
-    WHERE tenant_id = ? AND doctor_id = ? AND appointment_date = ? 
-      AND start_time = ? AND status NOT IN ('CANCELLED') FOR UPDATE
-  - If existing appointment found: Release lock, throw ValidationException
-                        │
-                        ▼
-[ Step 5: Persist Appointment & Commit Transaction ]
-  - Insert new Appointment record with status = 'SCHEDULED'
-  - Dispatch AppointmentCreatedEvent -> Queue job SendAppointmentNotificationJob
+                               │
+                               ▼
+[ Step 4: Database Range Overlap Check (Pessimistic Locking) ]
+  - Query with FOR UPDATE:
+    SELECT * FROM appointments 
+    WHERE tenant_id = :tenant_id 
+      AND doctor_id = :doctor_id 
+      AND appointment_date = :date 
+      AND start_time < :new_end_time 
+      AND end_time > :new_start_time 
+      AND status NOT IN ('CANCELLED', 'NO_SHOW') 
+    FOR UPDATE;
+  - If any row returned: Throw SlotConflictException ("Requested time range overlaps with an existing appointment")
+                               │
+                               ▼
+[ Step 5: Insert Appointment & Commit ]
+  - Insert record with status = 'SCHEDULED'
   - Release Redis Lock
 ```
 
-### 6.2 Pharmacy Stock Ledger & FEFO Dispensation
-Dispensing medicine strictly maintains inventory integrity using **First-Expired, First-Out (FEFO)** order:
-
-1. When a prescription item is confirmed for dispensing:
-   * Query `medicine_batches` where `medicine_id = ?` and `quantity > 0`, ordered by `expiry_date ASC`.
-   * Open a MySQL Database Transaction.
-2. For each batch in FEFO order:
-   * Allocate `min(remaining_needed, batch.quantity)`.
+### 6.2 Pharmacy FEFO Dispensation & Atomic Stock Depletion
+Prescriptions are dispensed strictly following **First-Expired, First-Out (FEFO)**:
+1. When confirmed for dispensing, query batches: `WHERE medicine_id = ? AND quantity > 0 ORDER BY expiry_date ASC`.
+2. Inside a database transaction:
+   * Allocate units from earliest expiring batches.
    * Decrement `medicine_batches.quantity`.
-   * Insert row in `inventory_transactions` (`type = 'DISPENSE'`, `quantity = -deducted`, `balance_after = new_batch_bal`).
-3. Decrement `medicines.current_stock` by total dispensed quantity.
-4. If `medicines.current_stock <= medicines.reorder_level`:
-   * Trigger `LowStockAlertNotification` to hospital pharmacists.
-5. Update `prescription_items.dispensed_quantity` and prescription status to `'DISPENSED'`.
-6. Dispatch auto-billing hook: Append item to patient’s draft/issued invoice.
+   * Log an immutable row in `inventory_transactions` (`type = 'DISPENSE'`, `quantity = -X`).
+3. Decrement `medicines.current_stock`.
+4. If `current_stock <= reorder_level`, dispatch `LowStockAlertNotification`.
+5. Update prescription status to `'DISPENSED'`.
 
-### 6.3 Bed Occupancy & Inpatient Billing Aggregator
-Bed allocation and inpatient room stays are tracked through an automated state machine:
-
-```
-                  ┌──────────────┐
-                  │  AVAILABLE   │
-                  └──────┬───────┘
-                         │ Admit Patient
-                         ▼
-                  ┌──────────────┐
-        ┌─────────┤   OCCUPIED   ├─────────┐
-        │         └──────┬───────┘         │
-        │ Transfer Bed   │ Discharge       │ Bed Maintenance
-        ▼                ▼                 ▼
-  ┌───────────┐   ┌──────────────┐   ┌───────────┐
-  │ RESERVED  │   │  AVAILABLE   │   │MAINTENANCE│
-  └───────────┘   └──────────────┘   └───────────┘
-```
-
-**Daily Room Rate Calculation Algorithm**:
-* Upon discharge, or daily at midnight via scheduled cron job `CalculateDailyBedChargesJob`:
-  * Calculate duration: `max(1, ceil((discharge_or_now - admission_date) in hours / 24))`.
-  * Multiplied by `rooms.rate_per_day`.
-  * Upsert corresponding line items in `invoice_items` (`item_type = 'BED_CHARGE'`).
+### 6.3 Inpatient Bed Occupancy & Room Charge Calculation
+* **Bed State Transitions**: `AVAILABLE` ↔ `OCCUPIED` ↔ `RESERVED` ↔ `MAINTENANCE`.
+* **Daily Room Charge Calculation**:
+  * Executed daily at midnight via `CalculateDailyBedChargesJob`:
+  * Calculated as `max(1, ceil((discharge_or_now - admission_date) in hours / 24)) * rooms.rate_per_day`.
+  * Upserts item in `invoice_items` (`item_type = 'BED_CHARGE'`).
 
 ---
 
 # 7. Livewire Component Specifications
 
-All UI pages are composed of cohesive, reactive Livewire 3 components.
+### 7.1 Front Desk & Scheduling
+* **`Reception::PatientRegistrationModal`**: Real-time duplicate phone validation, automatic patient number assignment, writes basic demographics to `patients`.
+* **`Reception::AppointmentScheduler`**: Interactive calendar with doctor slot picker, real-time availability calculation, range conflict validation.
 
-### 7.1 Receptionist & Front-Desk Module
+### 7.2 Clinical Desk
+* **`Doctor::ConsultationDesk`**: Two-column layout:
+  * *Left Column*: Historical patient timeline (diagnoses, previous visits, lab history).
+  * *Right Column*: Live consultation workspace (Vitals, ICD-10 diagnosis picker, e-prescription rows, lab test checkboxes).
+  * Persists visit notes and clinical data with application-level encryption.
 
-#### `Reception::PatientRegistrationModal`
-* **File**: `app/Livewire/Reception/PatientRegistrationModal.php`
-* **Blade**: `resources/views/livewire/reception/patient-registration-modal.blade.php`
-* **Component State**:
-  * `$first_name`, `$last_name`, `$date_of_birth`, `$gender`, `$phone`, `$email`, `$blood_group`, `$national_id`, `$emergency_contact_name`, `$emergency_contact_phone`, `$allergies`
-* **Reactive Behaviors**:
-  * Real-time duplicate phone validation against `patients` within current tenant.
-  * Automatic `patient_number` generation on modal launch (e.g., `HOSP-YYYY-XXXXX`).
-* **Livewire Actions**:
-  * `save()`: Validates input, begins DB transaction, creates patient, writes audit log, emits `patient-created` browser event to refresh list, closes modal with toast.
+### 7.3 Pharmacy & Laboratory
+* **`Pharmacy::DispenseCounter`**: Barcode/UUID prescription lookup, FEFO batch allocation preview, physical dispensing confirmation, printable instruction slips.
+* **`Lab::ResultEntryDesk`**: Specimen collection logging, dynamic JSON parameter entry based on test type (e.g. Hemoglobin, Platelets), automatic flag for out-of-range values.
 
-#### `Reception::AppointmentScheduler`
-* **File**: `app/Livewire/Reception/AppointmentScheduler.php`
-* **Blade**: `resources/views/livewire/reception/appointment-scheduler.blade.php`
-* **Component State**:
-  * `$selectedDepartmentId`, `$selectedDoctorId`, `$selectedDate`, `$availableSlots = []`, `$patientSearchQuery`, `$selectedPatientId`
-* **Reactive Behaviors**:
-  * `updatedSelectedDoctorId()` / `updatedSelectedDate()`: Recomputes available slot array dynamically by calling `SlotGeneratorService::getAvailableSlots($doctorId, $date)`.
-* **Livewire Actions**:
-  * `bookSlot($timeString)`: Acquires Redis lock, executes appointment transaction, dispatches confirmation job, shows success badge.
+### 7.4 Inpatient Bed Grid
+* **`Inpatient::BedBoard`**: Color-coded ward layout (Emerald = Available, Crimson = Occupied, Amber = Reserved, Gray = Maintenance). Drag-and-drop or modal-driven patient bed transfers.
+
+### 7.5 Cashier & Invoicing
+* **`Billing::CashierTerminal`**: Aggregated line-item invoice inspector, concession/discount authorization, idempotent payment processing (Cash, POS, Stripe), printable PDF receipts.
 
 ---
 
-### 7.2 Doctor Clinical Workspace Module
-
-#### `Doctor::ConsultationDesk`
-* **File**: `app/Livewire/Doctor/ConsultationDesk.php`
-* **Blade**: `resources/views/livewire/doctor/consultation-desk.blade.php`
-* **Layout**: Two-column responsive split layout.
-  * **Left Column**: Collapsible Patient Timeline (Past visits, diagnoses, chronic allergies, vitals chart, previous lab results).
-  * **Right Column**: Active Consultation Tabs (Clinical Notes, Vitals, ICD-10 Diagnosis, E-Prescription Builder, Lab Order Selector).
-* **Component State**:
-  * `$visitId`, `$patient`, `$systolic_bp`, `$diastolic_bp`, `$temperature`, `$clinical_notes`, `$prescriptionItems = []`, `$selectedLabTests = []`
-* **Livewire Actions**:
-  * `addPrescriptionRow()`: Dynamically appends `{ medicine_id: null, dosage: '', frequency: '', duration_days: 5 }` to `$prescriptionItems`.
-  * `removePrescriptionRow($index)`: Slices row from array.
-  * `completeConsultation()`: Atomically validates encounter notes, persists diagnoses, creates prescriptions, queues lab orders, generates draft billing invoice, marks appointment as `'COMPLETED'`, redirects to doctor queue.
-
----
-
-### 7.3 Pharmacy Dispensing Desk
-
-#### `Pharmacy::DispenseCounter`
-* **File**: `app/Livewire/Pharmacy/DispenseCounter.php`
-* **Blade**: `resources/views/livewire/pharmacy/dispense-counter.blade.php`
-* **Component State**:
-  * `$prescriptionSearchCode`, `$activePrescription`, `$batchAllocations = []`
-* **Livewire Actions**:
-  * `searchPrescription()`: Finds pending prescription by UUID or patient registration code.
-  * `autoAllocateBatches()`: Runs FEFO algorithm, presents selected batches to pharmacist for manual barcode verification.
-  * `confirmDispense()`: Deducts stock, generates inventory transaction logs, updates prescription to `'DISPENSED'`, prints patient medicine instruction slip.
-
----
-
-### 7.4 Inpatient Bed Grid (IPD)
-
-#### `Inpatient::BedBoard`
-* **File**: `app/Livewire/Inpatient/BedBoard.php`
-* **Blade**: `resources/views/livewire/inpatient/bed-board.blade.php`
-* **Visual Presentation**: Color-coded ward layout (Emerald = Available, Crimson = Occupied, Amber = Reserved, Gray = Maintenance).
-* **Component State**:
-  * `$selectedWardId`, `$wards`, `$filterStatus`
-* **Livewire Actions**:
-  * `openAdmitModal($bedId)`: Opens patient admission modal targeting selected bed.
-  * `transferPatient($fromBedId, $toBedId)`: Validates target bed availability, shifts admission record, resets old bed to `'AVAILABLE'`, sets new bed to `'OCCUPIED'`.
-
----
-
-### 7.5 Cashier & Invoicing Terminal
-
-#### `Billing::CashierTerminal`
-* **File**: `app/Livewire/Billing/CashierTerminal.php`
-* **Blade**: `resources/views/livewire/billing/cashier-terminal.blade.php`
-* **Component State**:
-  * `$invoiceId`, `$invoice`, `$paymentAmount`, `$paymentMethod = 'CASH'`, `$transactionReference`, `$discountAmount`
-* **Livewire Actions**:
-  * `applyDiscount($amount)`: Recalculates `total_amount` and `balance_due` (authorized by `billing.apply_discount` permission).
-  * `recordPayment()`: Uses UUID `idempotency_key`, inserts `payments` record, updates `invoices.paid_amount` and status (`'PARTIALLY_PAID'` or `'PAID'`), generates printable receipt PDF.
-
----
-
-# 8. REST API Specification
-
-For external services, mobile integration, or lab device sync, the system exposes a versioned, secure REST API.
+# 8. REST API & Webhook Specification
 
 ### 8.1 Universal Response Envelope
-Every API response adheres to a strict JSON structure:
-
 ```json
 {
   "success": true,
@@ -877,136 +531,109 @@ Every API response adheres to a strict JSON structure:
   "data": {},
   "meta": {
     "timestamp": "2026-09-14T10:30:00Z",
-    "tenant": "mercy-general",
-    "pagination": {
-      "total": 120,
-      "per_page": 15,
-      "current_page": 1,
-      "last_page": 8
-    }
+    "tenant": "mercy-general"
   }
 }
 ```
 
-### 8.2 Authentication & Headers
-* All API requests require:
-  * `Authorization: Bearer <sanctum_token>`
-  * `X-Tenant-ID: <subdomain_or_uuid>` (optional if resolved by subdomain)
-  * `Accept: application/json`
-
-### 8.3 Core API Endpoints
-
-| Method | Endpoint | Description | Required Permission |
-| :--- | :--- | :--- | :--- |
-| `POST` | `/api/v1/auth/login` | Authenticate staff & issue Sanctum token | Public (Rate-limited) |
-| `GET` | `/api/v1/patients` | Paginated search of patient demographics | `patient.view_basic` |
-| `POST` | `/api/v1/patients` | Register a new patient record | `patient.create` |
-| `GET` | `/api/v1/patients/{uuid}` | Full patient profile & medical history | `patient.view_phi` |
-| `GET` | `/api/v1/doctors` | List doctors filtered by department | `appointment.view` |
-| `GET` | `/api/v1/doctors/{id}/slots` | Get free slots for a specific date | `appointment.view` |
-| `POST` | `/api/v1/appointments` | Book appointment with concurrency lock | `appointment.create` |
-| `PATCH`| `/api/v1/appointments/{id}/status`| Update status (CHECKED_IN, CANCELLED) | `appointment.reschedule` |
-| `POST` | `/api/v1/visits` | Start or record clinical consultation | `visit.create` |
-| `POST` | `/api/v1/prescriptions` | Issue medication prescription | `prescription.create` |
-| `POST` | `/api/v1/lab-orders` | Create laboratory diagnostic order | `lab.order` |
-| `POST` | `/api/v1/lab-orders/{id}/results`| Upload diagnostic test results | `lab.enter_results` |
-| `GET` | `/api/v1/invoices` | List invoices by status / date / patient | `billing.create_invoice` |
-| `POST` | `/api/v1/payments` | Record payment against invoice (Idempotent)| `billing.collect_payment` |
+### 8.2 Endpoint Catalog
+* `POST /api/v1/auth/login`: Sanctum token issuance (rate-limited).
+* `GET /api/v1/patients`: Demographic search (`patient.view_basic`).
+* `GET /api/v1/patients/{uuid}/clinical`: PHI profile (`patient.view_phi`).
+* `POST /api/v1/appointments`: Book appointment with range lock.
+* `POST /api/v1/visits`: Start or record clinical encounter.
+* `POST /api/v1/prescriptions`: Prescribe medications.
+* `POST /api/v1/lab-orders`: Issue lab order.
+* `POST /api/v1/payments`: Idempotent payment recording.
+* `POST /api/v1/webhooks/stripe`: Stripe payment & subscription reconciliation (signature verified).
 
 ---
 
 # 9. Background Jobs, Queues & Notifications
 
-### 9.1 Redis Queue Infrastructure
-Queues are managed via Laravel Horizon using distinct priority queues:
-* `high`: Immediate transactional emails, OTP codes, 2FA tokens, Redis lock releases.
-* `notifications`: Appointment booking confirmations, SMS alerts, reminder messages.
+Managed via Laravel Horizon across three Redis queues:
+* `high`: Immediate OTPs, 2FA tokens, Redis lock releases.
+* `notifications`: Appointment confirmations, SMS alerts, reminder emails.
 * `reports`: Asynchronous PDF invoice creation, lab report compilation, month-end financial rollups.
 
-### 9.2 Asynchronous Job Registry
+### Asynchronous Job Registry
 
 | Job Class | Queue | Trigger Event | Action |
 | :--- | :--- | :--- | :--- |
-| `SendAppointmentNotificationJob` | `notifications` | `AppointmentCreatedEvent` | Sends SMS & email confirmation to patient with date and time |
-| `SendAppointmentReminderJob` | `notifications` | Scheduled (24h before appointment)| Notifies patient of upcoming clinic visit |
-| `GenerateInvoicePdfJob` | `reports` | `InvoiceIssuedEvent` | Compiles DomPDF invoice, stores in storage disk, attaches link |
-| `SendLabResultsReadyJob` | `notifications` | `LabResultVerifiedEvent` | Alerts attending doctor and patient that test results are verified |
-| `ProcessBatchStockWarningJob` | `high` | `InventoryTransactionRecorded` | Dispatches low-stock / expired medication alerts to pharmacists |
-| `CalculateDailyBedChargesJob`| `reports` | Scheduled (Every midnight 00:01) | Calculates 24h occupancy room charges for all active admissions |
+| `SendAppointmentNotificationJob` | `notifications` | `AppointmentCreatedEvent` | Sends SMS & email confirmation to patient |
+| `SendAppointmentReminderJob` | `notifications` | Scheduled (24h prior) | Sends clinic reminder to patient |
+| `GenerateInvoicePdfJob` | `reports` | `InvoiceIssuedEvent` | Renders PDF invoice and stores on disk |
+| `SendLabResultsReadyJob` | `notifications` | `LabResultVerifiedEvent` | Alerts attending doctor and patient |
+| `ProcessBatchStockWarningJob` | `high` | `InventoryTransactionRecorded` | Alerts pharmacists of low or expiring stock |
+| `CalculateDailyBedChargesJob`| `reports` | Scheduled (00:01 daily) | Computes daily occupancy fees for active stays |
+| `StripeWebhookReconciliationJob`| `high` | Stripe webhook received | Idempotently updates subscription/invoice status |
+| `AnonymizePatientDataJob` | `reports` | `PatientErasureRequested` | Executes GDPR-compliant irreversible anonymization |
 
 ---
 
-# 10. Audit Logging, PHI Security & Compliance
+# 10. Audit Logging, PHI Security & GDPR Right-to-Erasure
 
-### 10.1 Immutable Audit Log Engine
-Every model accessing or modifying Protected Health Information (PHI) is tracked by the `AuditObserver` class.
+### 10.1 Dual-Layer Encryption Strategy
+1. **Infrastructure Level**: MySQL InnoDB Transparent Data Encryption (TDE) encrypts all database files and logs on disk.
+2. **Application Level**: Sensitive clinical fields are encrypted using AES-256-CBC via Laravel model casts:
+   * `patient_clinical_profiles.national_id`, `allergies`, `chronic_conditions`
+   * `visits.clinical_notes`, `examination`, `treatment_plan`
+   * `diagnoses.diagnosis_name`, `comments`
+   * `users.two_factor_secret`
 
-* **Trigger Events**:
-  * View of sensitive patient records (`VIEW_PHI` recorded through controller/Livewire hook).
-  * Create, Update, Delete of any clinical, prescription, or financial row.
-* **Payload Structure**:
-  * Captures: `user_id`, `tenant_id`, `action`, `ip_address`, `user_agent`, `old_values` (JSON diff), and `new_values` (JSON diff).
-* **Immutability**:
-  * MySQL database permissions for standard application users do not grant `UPDATE` or `DELETE` on the `audit_logs` table.
+### 10.2 Immutable Audit Logging
+* Any read access to `patient_clinical_profiles` or clinical records generates an immutable `VIEW_PHI` audit log entry.
+* Database user grants for application connections strictly exclude `UPDATE` or `DELETE` on the `audit_logs` table.
 
-### 10.2 Cryptographic Protection
-* **At Rest**:
-  * Sensitive patient identifiers (`national_id`, passport numbers) are encrypted using Laravel’s AES-256-CBC encryption (`casts => ['national_id' => 'encrypted']`).
-* **In Transit**:
-  * Strict HTTPS transport security (HSTS headers enabled).
-* **Storage Isolation**:
-  * Medical lab attachments (radiology scans, PDF reports) are stored in private object storage disks with time-limited pre-signed URLs (15-minute TTL) generated on-demand.
+### 10.3 GDPR Right-to-Erasure (Anonymization Engine)
+Medical regulations require retaining medical records and financial books for statutory periods (often 5–10 years), conflicting with GDPR Art. 17 (Right to Erasure). The system resolves this conflict through **cryptographic anonymization**:
+
+When `AnonymizePatientDataJob` executes:
+1. `patients` demographic record is sanitized:
+   * `first_name = 'ANONYMIZED'`, `last_name = 'PATIENT'`
+   * `phone = NULL`, `email = NULL`, `address = NULL`
+   * `emergency_contact_name = NULL`, `emergency_contact_phone = NULL`
+2. `patient_clinical_profiles` row is hard-deleted.
+3. Financial ledgers (`invoices`, `payments`) and encounter counters are retained anonymously for statutory audit purposes without linking back to any natural person.
+4. An immutable audit record is logged: `action: 'PATIENT_ERASURE_COMPLETED'`.
 
 ---
 
-# 11. Decisions on Previous Open Questions
+# 11. Decisions on Architecture & Open Questions
 
-Section 53 of the original draft outlined 15 architectural and business ambiguities. Here are the explicit design decisions codified into this specification:
-
-1. **Tenant Boundaries**: One tenant corresponds strictly to one hospital or clinic organization. Branches within an organization are handled as distinct Departments or Facilities under the same `tenant_id`.
-2. **User Multi-Hospital Membership**: For MVP, users belong to a single primary hospital (`users.tenant_id`). Visiting consultants with multi-hospital duties are provisioned distinct user accounts linked by verified email.
-3. **Patient ID Uniqueness**: Patient records have an auto-increment internal ID, an external UUID, and a tenant-unique human-readable identifier (e.g. `HOSP-YYYY-XXXXX`) unique per tenant.
-4. **Platform Admin PHI Access**: Platform Administrators are strictly prohibited from viewing patient clinical data by default. Any support access requires entering a mandatory "Break-Glass Justification" that logs an immutable high-severity audit record.
-5. **Regulatory Baseline**: Built to HIPAA and GDPR security baselines (data encryption at rest, HTTPS in transit, role-based access control, comprehensive access audit trails, soft deletes).
-6. **Insurance Workflows**: Marked as Post-MVP Phase 2. The MVP supports standard manual and cash/card billing with itemized deductions and insurance reference tracking fields.
-7. **Pharmacy Scope**: Fully included in Phase 1 (Medicine catalog, batch tracking, FEFO automated stock deduction, dispensing, low-stock alarms).
-8. **Laboratory Scope**: Fully included in Phase 1 (Test catalog, order placement, specimen tracking, JSON result parameters, PDF attachment).
-9. **Inpatient / Admission Scope**: Fully included in Phase 1 (Ward, room, bed tracking, admission lifecycle, bed transfer, daily bed charge accumulation).
-10. **Patient Portal**: Read-only patient portal included for viewing personal appointments, prescriptions, diagnostic results, and invoices.
-11. **Notification Providers**: Multi-driver notification system using standard Laravel drivers (Mail via Resend/SES; SMS via Twilio; in-app database notifications).
-12. **Payment Methods**: Manual Cash, Card POS, Direct Bank Transfer, and Stripe Payment Gateway integration for online invoices.
-13. **Data Migration / Seeders**: Comprehensive database seeders provided for standard ICD-10 top 100 codes, sample departments, medication categories, and laboratory investigation panels.
-14. **Initial Scale Target**: Designed to effortlessly support 1,000 active concurrent hospital tenants, each handling up to 50,000 annual visits on a horizontally-scaled standard cluster.
-15. **Tenancy Compliance Verification**: Shared database / shared schema with application-level global scoping and tenant-prefixed foreign keys is verified as compliant with healthcare regulations when backed by row-level isolation and complete audit logging.
+1. **Tenant Isolation Single Point of Failure**: Addressed with a 3-tier defense: Eloquent global scope, automated CI architectural tests, and composite unique keys.
+2. **Platform Admin Unique Email Constraint**: Resolved using a virtual generated column `tenant_scope_key = COALESCE(tenant_id, 0)` with `UNIQUE(tenant_scope_key, email)`.
+3. **Segregation of PHI from Demographics**: Solved by splitting `patients` into `patients` (demographic) and `patient_clinical_profiles` (clinical PHI).
+4. **Appointment Slot Collisions**: Range overlap verification (`start_time < :end AND end_time > :start`) inside a pessimistic lock (`FOR UPDATE`) replaces exact-time matching.
+5. **Soft Deletes**: Added `deleted_at TIMESTAMP NULL` to all core transactional and demographic tables.
+6. **Platform-Side Billing**: Added `platform_plans`, `platform_subscriptions`, and `tenant_usage_metering` tables.
+7. **Custom Domain SSL**: Automates SSL issuance via Caddy On-Demand TLS or Cloudflare for SaaS.
+8. **Stripe Integration**: Added `StripeWebhookReconciliationJob` with idempotency safeguards.
 
 ---
 
 # 12. Scaffolding & Implementation Sequence
 
-This specification is ready for immediate, deterministic execution. The recommended scaffolding sequence is:
-
-1. **Phase 1: Foundation & Tenancy Core**
-   * Install Laravel 11 + Livewire 3 + Tailwind CSS + WireUI.
-   * Configure multi-tenancy middleware, `TenantManager` service, and `BelongsToTenant` Eloquent global scope trait.
-   * Run initial migrations for `tenants`, `tenant_settings`, `users`, and RBAC tables.
-2. **Phase 2: Master Data & Staff Management**
+1. **Phase 1: Foundation & Multi-Tenancy Core**
+   * Setup Laravel 11, Livewire 3, Tailwind CSS.
+   * Run migrations for `tenants`, `platform_plans`, `platform_subscriptions`, `users`, and RBAC.
+   * Implement `TenantManager` and `BelongsToTenant` trait with CI architecture test.
+2. **Phase 2: Master Data & Clinical Rosters**
    * Migrate and seed `departments`, `doctors`, `doctor_schedules`, and `doctor_leaves`.
-   * Implement Hospital Admin Livewire components for staff and clinic scheduling.
-3. **Phase 3: Front Desk & Patient Care Management**
-   * Migrate `patients`, `appointments`, `visits`, and `vitals`.
-   * Implement `AppointmentScheduler` (Livewire calendar) and `PatientRegistrationModal`.
-4. **Phase 4: Clinical Consultation & E-Prescriptions**
-   * Migrate `diagnoses`, `prescriptions`, `prescription_items`, and `lab_orders`.
+3. **Phase 3: Front Desk & Demographics**
+   * Migrate `patients` and `patient_clinical_profiles`.
+   * Implement `Reception::PatientRegistrationModal` and `AppointmentScheduler`.
+4. **Phase 4: Clinical Encounters & Medical Records**
+   * Migrate `appointments`, `visits`, `vitals`, `diagnoses`, `prescriptions`.
    * Build `Doctor::ConsultationDesk` Livewire split-view.
-5. **Phase 5: Pharmacy & Diagnostic Laboratory**
-   * Migrate `medicines`, `medicine_batches`, `inventory_transactions`, `lab_test_types`, and `lab_results`.
-   * Build `Pharmacy::DispenseCounter` (FEFO engine) and `Lab::ResultEntryDesk`.
+5. **Phase 5: Pharmacy & Diagnostics**
+   * Migrate `medicines`, `batches`, `inventory_transactions`, `lab_orders`, `lab_results`.
+   * Implement `Pharmacy::DispenseCounter` (FEFO engine) and `Lab::ResultEntryDesk`.
 6. **Phase 6: Inpatient Bed Management (IPD)**
    * Migrate `wards`, `rooms`, `beds`, `admissions`.
-   * Build interactive visual `BedBoard` Livewire component.
-7. **Phase 7: Billing, Cashier & Payments**
+   * Implement interactive `BedBoard` component and daily room charge cron job.
+7. **Phase 7: Billing & Cashier**
    * Migrate `invoices`, `invoice_items`, `payments`.
-   * Implement automatic billing aggregator and `Billing::CashierTerminal`.
-8. **Phase 8: Audit Logging, Queues & Production Hardening**
-   * Implement `AuditObserver` on all PHI models.
-   * Configure Redis queues, Horizon, health check endpoints, and automated tests.
+   * Implement auto-billing aggregator and `Billing::CashierTerminal`.
+8. **Phase 8: Audit Logging, Queues & Security Hardening**
+   * Implement `AuditObserver`, encryption casts, Horizon queues, and health check endpoints.
