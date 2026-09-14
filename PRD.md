@@ -2,13 +2,13 @@
 
 ## Multi-Tenant Hospital Management System (HMS)
 
-* **Backend Framework**: Laravel 11 (PHP 8.3+)
+* **Backend Framework**: Laravel 11.x / 12.x (Latest Stable, PHP 8.4+)
 * **Database**: MySQL 8.0+ (InnoDB with TDE)
 * **Cache & Queues**: Redis 7.0+
 * **Frontend Architecture**: Laravel Blade + Livewire 3 + Alpine.js + Tailwind CSS
 * **Product Type**: Multi-Tenant B2B Healthcare SaaS Platform
-* **Document Status**: Production-Ready Technical Specification
-* **Version**: 2.1.0 (Hardened Architecture)
+* **Document Status**: Implementation-Ready MVP Blueprint
+* **Version**: 2.2.0 (Engineering Execution Layer Complete)
 
 ---
 
@@ -35,12 +35,24 @@
 10. [Audit Logging, PHI Security & GDPR Right-to-Erasure](#10-audit-logging-phi-security--gdpr-right-to-erasure)
 11. [Decisions on Architecture & Open Questions](#11-decisions-on-architecture--open-questions)
 12. [Scaffolding & Implementation Sequence](#12-scaffolding--implementation-sequence)
+13. [Comprehensive Testing Strategy](#13-comprehensive-testing-strategy)
+14. [Phase-by-Phase Definition of Done (DoD)](#14-phase-by-phase-definition-of-done-dod)
+15. [Deployment Topology & Infrastructure](#15-deployment-topology--infrastructure)
+16. [CI/CD Pipeline (GitHub Actions)](#16-cicd-pipeline-github-actions)
+17. [Observability, Telemetry & Health Checks](#17-observability-telemetry--health-checks)
+18. [Disaster Recovery & Backup Policy](#18-disaster-recovery--backup-policy)
+19. [Security Testing & OWASP Mitigation](#19-security-testing--owasp-mitigation)
+20. [Local Development Environment & Docker](#20-local-development-environment--docker)
+21. [Seed Data & Demo Accounts](#21-seed-data--demo-accounts)
+22. [MVP Acceptance Criteria (End-to-End Scenarios)](#22-mvp-acceptance-criteria-end-to-end-scenarios)
+23. [Git Workflow & Commit Conventions](#23-git-workflow--commit-conventions)
+24. [Final Pre-Flight Checklist](#24-final-pre-flight-checklist)
 
 ---
 
 # 1. Product Overview & Architectural Philosophy
 
-The system is a production-grade, multi-tenant hospital management software platform engineered as a modular monolith in Laravel 11. It allows independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, strict regulatory compliance (HIPAA and GDPR), and high-throughput operational efficiency.
+The system is a multi-tenant hospital management software platform engineered as a modular monolith in Laravel 11. It allows independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, strict regulatory compliance (HIPAA and GDPR guidelines), and high-throughput operational efficiency.
 
 ```
                          ┌─────────────────────────────────┐
@@ -274,8 +286,6 @@ All tables run on MySQL 8.0+ with InnoDB and Transparent Data Encryption (TDE). 
 
 ### 4.4 Patients & Split Clinical Demographics (PHI)
 
-*Patients are divided into two physical tables to decouple non-sensitive demographic data from sensitive clinical PHI.*
-
 #### `patients` (Demographic Layer — Accessible by Reception & Billing)
 | Column | Type | Constraints | Nullable | Default | Description |
 | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -439,7 +449,7 @@ All tables run on MySQL 8.0+ with InnoDB and Transparent Data Encryption (TDE). 
 # 6. Core Business Engines & State Machines
 
 ### 6.1 Doctor Availability & Overlapping Slot Reservation Engine
-To prevent double-booking when appointments have varying durations (e.g. 15-minute checkups vs. 45-minute emergency consultations), the booking engine checks for **range overlaps** rather than exact start-time matches.
+To prevent double-booking when appointments have varying durations, the booking engine checks for **range overlaps** rather than exact start-time matches.
 
 ```
 [ Incoming Booking Request: Doctor ID, Date, Start Time, End Time ]
@@ -469,7 +479,7 @@ To prevent double-booking when appointments have varying durations (e.g. 15-minu
       AND end_time > :new_start_time 
       AND status NOT IN ('CANCELLED', 'NO_SHOW') 
     FOR UPDATE;
-  - If any row returned: Throw SlotConflictException ("Requested time range overlaps with an existing appointment")
+  - If any row returned: Throw SlotConflictException
                                │
                                ▼
 [ Step 5: Insert Appointment & Commit ]
@@ -511,10 +521,10 @@ Prescriptions are dispensed strictly following **First-Expired, First-Out (FEFO)
 
 ### 7.3 Pharmacy & Laboratory
 * **`Pharmacy::DispenseCounter`**: Barcode/UUID prescription lookup, FEFO batch allocation preview, physical dispensing confirmation, printable instruction slips.
-* **`Lab::ResultEntryDesk`**: Specimen collection logging, dynamic JSON parameter entry based on test type (e.g. Hemoglobin, Platelets), automatic flag for out-of-range values.
+* **`Lab::ResultEntryDesk`**: Specimen collection logging, dynamic JSON parameter entry based on test type, automatic flag for out-of-range values.
 
 ### 7.4 Inpatient Bed Grid
-* **`Inpatient::BedBoard`**: Color-coded ward layout (Emerald = Available, Crimson = Occupied, Amber = Reserved, Gray = Maintenance). Drag-and-drop or modal-driven patient bed transfers.
+* **`Inpatient::BedBoard`**: Color-coded ward layout (Emerald = Available, Crimson = Occupied, Amber = Reserved, Gray = Maintenance). Modal-driven patient bed transfers.
 
 ### 7.5 Cashier & Invoicing
 * **`Billing::CashierTerminal`**: Aggregated line-item invoice inspector, concession/discount authorization, idempotent payment processing (Cash, POS, Stripe), printable PDF receipts.
@@ -586,13 +596,8 @@ Managed via Laravel Horizon across three Redis queues:
 * Database user grants for application connections strictly exclude `UPDATE` or `DELETE` on the `audit_logs` table.
 
 ### 10.3 GDPR Right-to-Erasure (Anonymization Engine)
-Medical regulations require retaining medical records and financial books for statutory periods (often 5–10 years), conflicting with GDPR Art. 17 (Right to Erasure). The system resolves this conflict through **cryptographic anonymization**:
-
 When `AnonymizePatientDataJob` executes:
-1. `patients` demographic record is sanitized:
-   * `first_name = 'ANONYMIZED'`, `last_name = 'PATIENT'`
-   * `phone = NULL`, `email = NULL`, `address = NULL`
-   * `emergency_contact_name = NULL`, `emergency_contact_phone = NULL`
+1. `patients` demographic record is sanitized (`first_name = 'ANONYMIZED'`, phone/email zeroed).
 2. `patient_clinical_profiles` row is hard-deleted.
 3. Financial ledgers (`invoices`, `payments`) and encounter counters are retained anonymously for statutory audit purposes without linking back to any natural person.
 4. An immutable audit record is logged: `action: 'PATIENT_ERASURE_COMPLETED'`.
@@ -637,3 +642,395 @@ When `AnonymizePatientDataJob` executes:
    * Implement auto-billing aggregator and `Billing::CashierTerminal`.
 8. **Phase 8: Audit Logging, Queues & Security Hardening**
    * Implement `AuditObserver`, encryption casts, Horizon queues, and health check endpoints.
+
+---
+
+# 13. Comprehensive Testing Strategy
+
+A multi-tenant healthcare application demands rigorous, multi-layered automated testing. The test suite uses **Pest PHP v3** with the Pest Laravel and Architecture plugins.
+
+```
+                  ┌─────────────────────────────────┐
+                  │    End-to-End Acceptance Tests  │  (Critical Happy Paths)
+                  └────────────────┬────────────────┘
+                                   │
+                  ┌────────────────┴────────────────┐
+                  │     Livewire & Component Tests  │  (UI Interaction & Reactive State)
+                  └────────────────┬────────────────┘
+                                   │
+                  ┌────────────────┴────────────────┐
+                  │    API & Integration Tests      │  (Tenant Scoping, RBAC, HTTP Contracts)
+                  └────────────────┬────────────────┘
+                                   │
+                  ┌────────────────┴────────────────┐
+                  │  Unit & Architecture Rule Tests │  (Pest Arch, FEFO Engine, Slot Lock)
+                  └─────────────────────────────────┘
+```
+
+### 13.1 Critical Tenant Isolation Tests (MANDATORY)
+Shared-schema multi-tenancy introduces the risk of cross-tenant leakage. The following tests must pass for every entity:
+
+```php
+test('tenant A cannot access or see patient belonging to tenant B', function () {
+    $tenantA = Tenant::factory()->create(['subdomain' => 'tenant-a']);
+    $tenantB = Tenant::factory()->create(['subdomain' => 'tenant-b']);
+
+    $patientA = Patient::factory()->create(['tenant_id' => $tenantA->id]);
+    $patientB = Patient::factory()->create(['tenant_id' => $tenantB->id]);
+
+    $userA = User::factory()->create(['tenant_id' => $tenantA->id]);
+
+    // Test 1: Query Eloquent Scope
+    testTenantContext($tenantA);
+    expect(Patient::all())->toHaveCount(1)
+        ->first()->id->toBe($patientA->id)
+        ->and(Patient::where('id', $patientB->id)->first())->toBeNull();
+
+    // Test 2: HTTP Route Protection
+    actingAs($userA)
+        ->get("/api/v1/patients/{$patientB->uuid}")
+        ->assertStatus(404); // Must return 404, not 403, to prevent ID enumeration
+});
+
+test('tenant A cannot update patient belonging to tenant B via ID manipulation', function () {
+    $tenantA = Tenant::factory()->create(['subdomain' => 'tenant-a']);
+    $tenantB = Tenant::factory()->create(['subdomain' => 'tenant-b']);
+
+    $patientB = Patient::factory()->create(['tenant_id' => $tenantB->id, 'phone' => '111']);
+    $userA = User::factory()->create(['tenant_id' => $tenantA->id]);
+
+    actingAs($userA)
+        ->putJson("/api/v1/patients/{$patientB->uuid}", ['phone' => '999'])
+        ->assertStatus(404);
+
+    expect($patientB->fresh()->phone)->toBe('111');
+});
+```
+
+### 13.2 Concurrency & Race-Condition Tests
+* **Appointment Double-Booking Concurrency Test**: Spawns two parallel threads attempting to reserve overlapping appointment slots for the same doctor. Asserts that exactly one succeeds (HTTP 201) and one fails (HTTP 409 Conflict).
+* **FEFO Inventory Stock Depletion Test**: Simulates simultaneous checkout of 5 units of medicine when only 5 units exist in stock. Asserts that the second attempt fails with an `InsufficientStockException`, stock balance never drops below zero, and no negative inventory transaction is logged.
+* **Payment Idempotency Test**: Submits identical `POST /api/v1/payments` payloads with matching `Idempotency-Key` headers concurrently. Verifies that only one payment record is created and both requests receive the same receipt response.
+
+### 13.3 Architectural Rules (Pest Arch)
+```php
+arch('tenant models must enforce tenancy and soft deletes')
+    ->expect('App\Models\Tenant')
+    ->toUse('App\Models\Concerns\BelongsToTenant')
+    ->toUse('Illuminate\Database\Eloquent\SoftDeletes');
+
+arch('controllers must remain thin and delegate to services')
+    ->expect('App\Http\Controllers')
+    ->not->toUse('Illuminate\Support\Facades\DB');
+
+arch('strict types are enforced across the codebase')
+    ->expect('App')
+    ->toUseStrictTypes();
+```
+
+---
+
+# 14. Phase-by-Phase Definition of Done (DoD)
+
+To ensure measurable, verified progress during development, each phase must satisfy this concrete checklist before being marked complete:
+
+```text
+Phase is Complete ONLY When:
+[ ] All migrations in phase run without warnings or errors.
+[ ] Rollback test (migrate:rollback) cleans up all phase tables cleanly.
+[ ] Model relationships, casts, and constraints are covered by unit tests.
+[ ] Every tenant-scoped model includes BelongsToTenant and SoftDeletes.
+[ ] Granular authorization policies exist for every user action.
+[ ] Tenant isolation test passes (verifying Tenant A cannot see/alter Tenant B records).
+[ ] Reactive Livewire components render correctly and handle validation errors.
+[ ] API endpoints return the standardized JSON envelope with proper status codes.
+[ ] AuditObserver logs an immutable entry for all state changes and PHI views.
+[ ] Automated test suite runs green with zero failures.
+[ ] Static analysis passes at PHPStan Level 8 with zero errors.
+```
+
+---
+
+# 15. Deployment Topology & Infrastructure
+
+The application runs on stateless Docker application nodes behind an SSL-terminating reverse proxy.
+
+```
+                           ┌──────────────────────────────┐
+                           │      Internet Traffic        │
+                           └──────────────┬───────────────┘
+                                          │
+                                          ▼
+                           ┌──────────────────────────────┐
+                           │     Caddy 2 Reverse Proxy    │
+                           │  (On-Demand TLS / Wildcard)  │
+                           └──────────────┬───────────────┘
+                                          │
+                   ┌──────────────────────┼──────────────────────┐
+                   ▼                      ▼                      ▼
+         ┌──────────────────┐   ┌──────────────────┐   ┌──────────────────┐
+         │ App Container 1  │   │ App Container 2  │   │ Horizon Worker   │
+         │ (PHP 8.4 + Nginx)│   │ (PHP 8.4 + Nginx)│   │ (Queue Daemon)   │
+         └─────────┬────────┘   └─────────┬────────┘   └─────────┬────────┘
+                   │                      │                      │
+                   └──────────────────────┼──────────────────────┘
+                                          │
+                 ┌────────────────────────┼────────────────────────┐
+                 ▼                        ▼                        ▼
+      ┌────────────────────┐   ┌────────────────────┐   ┌────────────────────┐
+      │  MySQL 8.0 Primary │   │  Redis 7 Cluster   │   │  AWS S3 / MinIO    │
+      │   (InnoDB + TDE)   │   │(Disposable Cache/Q)│   │  (Encrypted PHI)   │
+      └────────────────────┘   └────────────────────┘   └────────────────────┘
+```
+
+* **SSL Termination**: Caddy 2 handles automated Let's Encrypt certificates for wildcards (`*.medihms.test`) and customer CNAMEs via On-Demand TLS with an internal webhook verification check (`/api/v1/internal/validate-domain`).
+* **Stateless App Nodes**: App nodes store zero local state. Sessions reside in Redis, files in S3, and database state in MySQL.
+
+---
+
+# 16. CI/CD Pipeline (GitHub Actions)
+
+Every pull request and push to `main` triggers an automated GitHub Actions pipeline:
+
+```yaml
+name: CI/CD Pipeline
+
+on: [push, pull_request]
+
+jobs:
+  quality-and-tests:
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: hms_testing
+          MYSQL_ROOT_PASSWORD: secret
+        ports: ['3306:3306']
+        options: --health-cmd="mysqladmin ping" --health-interval=10s --health-timeout=5s --health-retries=3
+      redis:
+        image: redis:7-alpine
+        ports: ['6379:6379']
+
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.4'
+          extensions: mbstring, pdo_mysql, redis, bcmath
+          coverage: pcov
+
+      - name: Install Dependencies
+        run: composer install --prefer-dist --no-interaction --no-progress
+
+      - name: Code Style Check (Laravel Pint)
+        run: ./vendor/bin/pint --test
+
+      - name: Static Analysis (PHPStan Level 8)
+        run: ./vendor/bin/phpstan analyse --memory-limit=2G
+
+      - name: Architecture Tests
+        run: ./vendor/bin/pest --filter=arch
+
+      - name: Run Test Suite (Pest Parallel)
+        run: ./vendor/bin/pest --parallel --coverage --min=80
+        env:
+          DB_CONNECTION: mysql
+          DB_HOST: 127.0.0.1
+          DB_PORT: 3306
+          DB_DATABASE: hms_testing
+          DB_USERNAME: root
+          DB_PASSWORD: secret
+          REDIS_HOST: 127.0.0.1
+```
+
+---
+
+# 17. Observability, Telemetry & Health Checks
+
+### 17.1 Health Check Endpoints
+* `GET /health/liveness`: Fast check returning `{"status": "ok"}` (used by container orchestrator to detect crashes).
+* `GET /health/readiness`: Verifies that dependencies are responding:
+  * MySQL: Runs `SELECT 1` (latency threshold < 100ms).
+  * Redis: Runs `PING` (latency threshold < 20ms).
+  * Storage: Verifies read/write access to S3/MinIO bucket.
+
+### 17.2 Telemetry & Error Tracking
+* **Sentry Integration**: Exceptions are automatically captured with tenant metadata (`tenant_id`, `subdomain`). Sensitive clinical parameters and personal data (names, SSNs, notes) are sanitized in the `before_send` hook.
+* **Laravel Horizon Dashboard**: Real-time monitoring of queue latency, failed jobs, and throughput accessible exclusively by Platform Admins at `admin.medihms.test/horizon`.
+* **Database Performance**: MySQL slow-query log enabled with a 200ms threshold.
+
+---
+
+# 18. Disaster Recovery & Backup Policy
+
+### 18.1 Architectural Principle
+* **MySQL is the Single Source of Truth**: All operational records, clinical notes, and billing ledgers reside in MySQL with foreign key constraints.
+* **Redis is Disposable Performance Infrastructure**: If Redis is flushed or destroyed, the application continues to operate (queues will drain and locks will reset, but no patient or billing data is lost).
+
+### 18.2 Backup & Recovery SLA
+* **Automated Physical Snapshots**: Full automated MySQL backup once every 24 hours.
+* **Continuous Binary Logging (PITR)**: MySQL binary logs are streamed to S3, enabling Point-in-Time Recovery up to the last 5 minutes before an incident.
+* **Recovery Targets**:
+  * **Recovery Point Objective (RPO)**: < 5 minutes.
+  * **Recovery Time Objective (RTO)**: < 30 minutes.
+* **Disaster Recovery Drill**: Automated restoration to a staging environment runs on the 1st of every month.
+
+---
+
+# 19. Security Testing & OWASP Mitigation
+
+| Threat | OWASP Category | Architectural Mitigation |
+| :--- | :--- | :--- |
+| **Broken Object Level Auth (BOLA / IDOR)** | API1:2023 | Handled by Eloquent `BelongsToTenant` scope + route-model binding checks (`whereBelongsTo($tenant)`). |
+| **Broken Authentication** | API2:2023 | 2FA TOTP support, bcrypt with work factor 12, login rate-limiting (5 rpm per IP), Sanctum token hashing. |
+| **Broken Object Property Level Auth** | API3:2023 | Schema-level split of `patient_clinical_profiles` from `patients`; strict FormRequest validation on mass assignments. |
+| **Security Misconfiguration** | API7:2023 | Production debug mode disabled, HSTS headers forced, CORS restricted to tenant subdomains. |
+| **Injection (SQL/Command)** | A03:2021 | 100% prepared statements via Eloquent ORM; raw DB statements with parameter binding only. |
+
+---
+
+# 20. Local Development Environment & Docker
+
+The local development environment uses Docker Compose to mirror the production stack:
+
+```yaml
+version: '3.8'
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - '80:80'
+    volumes:
+      - .:/var/www/html
+    environment:
+      - DB_HOST=mysql
+      - REDIS_HOST=redis
+    depends_on:
+      - mysql
+      - redis
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: secret
+      MYSQL_DATABASE: hms_local
+    ports:
+      - '3306:3306'
+    volumes:
+      - db_data:/var/lib/mysql
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - '6379:6379'
+
+  mailpit:
+    image: axllent/mailpit
+    ports:
+      - '8025:8025'
+
+volumes:
+  db_data:
+```
+
+* **One-Command Setup**:
+  ```bash
+  make setup
+  # Executes: cp .env.example .env && docker compose up -d && composer install && php artisan key:generate && php artisan migrate --seed
+  ```
+
+---
+
+# 21. Seed Data & Demo Accounts
+
+For local development and testing, standard seeders provision realistic healthcare records and test accounts:
+
+### 21.1 Pre-Configured Demo Accounts (Password: `Password123!`)
+
+| Context | Role | Email | Subdomain |
+| :--- | :--- | :--- | :--- |
+| **Platform** | Platform Super Admin | `admin@medihms.test` | `admin.medihms.test` |
+| **Tenant 1** | Hospital Admin | `admin@mercy.test` | `mercy.medihms.test` |
+| **Tenant 1** | Doctor (Cardiology) | `dr.smith@mercy.test` | `mercy.medihms.test` |
+| **Tenant 1** | Receptionist | `reception@mercy.test` | `mercy.medihms.test` |
+| **Tenant 1** | Pharmacist | `pharmacy@mercy.test` | `mercy.medihms.test` |
+| **Tenant 1** | Lab Technician | `lab@mercy.test` | `mercy.medihms.test` |
+| **Tenant 1** | Accountant / Cashier| `billing@mercy.test` | `mercy.medihms.test` |
+| **Tenant 2** | Hospital Admin | `admin@cityclinic.test` | `cityclinic.medihms.test` |
+
+### 21.2 Master Data Seeders
+* Top 100 ICD-10 Diagnosis Codes (WHO taxonomy).
+* 8 Standard Hospital Departments (Cardiology, Pediatrics, Orthopedics, Emergency, General Medicine, Neurology, Pharmacy, Laboratory).
+* 30 Standard Medications with active batches and expiration dates across 6 categories.
+* 15 Standard Laboratory Test Profiles (CBC, Lipid Panel, Blood Glucose, Urinalysis, etc.).
+
+---
+
+# 22. MVP Acceptance Criteria (End-to-End Scenarios)
+
+The MVP is complete when the following end-to-end operational scenarios pass without manual intervention:
+
+### Scenario 1: Tenant Provisioning & Clinic Setup
+* Platform Admin creates tenant `mercy-general`.
+* Tenant record, default settings, and initial Hospital Admin user are created.
+* Hospital Admin logs into `mercy-general.medihms.test`, creates departments, and adds Doctor profiles with weekly recurring schedules.
+
+### Scenario 2: Front-Desk Booking & Conflict Prevention
+* Receptionist searches for existing patient or registers a new patient record.
+* Generates tenant-scoped `patient_number` (e.g. `HOSP-2026-00001`).
+* Selects doctor and date; slot picker displays real-time available 15-minute intervals.
+* Attempting to book an overlapping slot in parallel triggers a 409 conflict error; the winning reservation succeeds.
+
+### Scenario 3: Clinical Consultation & E-Prescribing
+* Doctor opens patient clinical workspace.
+* System logs an immutable `VIEW_PHI` audit event.
+* Doctor records vitals, assigns ICD-10 diagnosis, drafts an e-prescription, and orders a blood test.
+* Consultation is completed; prescription is queued to Pharmacy and lab order to the Laboratory.
+
+### Scenario 4: Pharmacy Dispense & FEFO Ledger
+* Pharmacist pulls up prescription by barcode/UUID.
+* System runs FEFO algorithm, selecting the earliest expiring batch.
+* Pharmacist confirms dispensation; batch stock decrements, inventory transaction logs, and low-stock alarms trigger if threshold is breached.
+
+### Scenario 5: Inpatient Bed Cycle & Daily Accrual
+* Nurse admits patient to general ward; bed status changes from `AVAILABLE` to `OCCUPIED`.
+* Midnight cron job calculates 24-hour occupancy charges and appends items to the invoice.
+* Doctor discharges patient; bed resets to `AVAILABLE` and final bill is locked.
+
+### Scenario 6: Cashier Payment & Idempotency
+* Cashier inspects itemized bill (consultation + lab + medication + room charges).
+* Collects payment via cash or card; provides idempotent receipt UUID.
+* Invoice balance updates to zero and status transitions to `'PAID'`.
+
+---
+
+# 23. Git Workflow & Commit Conventions
+
+The project adheres to **Conventional Commits**:
+
+* **Format**: `<type>(<scope>): <subject>`
+* **Allowed Types**:
+  * `feat`: New functional capability (e.g., `feat(pharmacy): implement FEFO batch allocation algorithm`).
+  * `fix`: Bug fix (e.g., `fix(tenancy): resolve unique email constraint for platform admins`).
+  * `docs`: Documentation updates (e.g., `docs(prd): add testing strategy and DoD`).
+  * `test`: Adding or refactoring tests (e.g., `test(isolation): add cross-tenant patient access tests`).
+  * `refactor`: Code changes that neither fix a bug nor add a feature.
+
+---
+
+# 24. Final Pre-Flight Checklist
+
+Before cutting the initial migrations, the engineering team or implementation agent must verify:
+
+```text
+[ ] Local environment running via Docker (PHP 8.4+, MySQL 8.0, Redis 7).
+[ ] Database connection verified with InnoDB engine and UTF8mb4 character set.
+[ ] Redis connection verified for cache, queues, and locks.
+[ ] Subdomain routing configured in local /etc/hosts (e.g. mercy.medihms.test).
+[ ] GitHub repository synchronized with branch protection rules on main.
+[ ] Pest test runner and PHPStan Level 8 configured in composer.json.
+```
