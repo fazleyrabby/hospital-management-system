@@ -2,8 +2,8 @@
 
 ## Multi-Tenant Hospital Management System (HMS)
 
-* **Backend Framework**: Laravel 11.x / 12.x (Latest Stable, PHP 8.4+)
-* **Database**: MySQL 8.0+ (InnoDB with TDE)
+* **Backend Framework**: Laravel 12.x (Latest Stable, PHP 8.4+)
+* **Database**: MySQL 8.0+
 * **Cache & Queues**: Redis 7.0+
 * **Frontend Architecture**: Laravel Blade + Livewire 3 + Alpine.js + Tailwind CSS
 * **Product Type**: Multi-Tenant B2B Healthcare SaaS Platform
@@ -32,7 +32,7 @@
 7. [Livewire Component Specifications](#7-livewire-component-specifications)
 8. [REST API & Webhook Specification](#8-rest-api--webhook-specification)
 9. [Background Jobs, Queues & Notifications](#9-background-jobs-queues--notifications)
-10. [Audit Logging, PHI Security & GDPR Right-to-Erasure](#10-audit-logging-phi-security--gdpr-right-to-erasure)
+10. [Audit Logging, PHI Security & Data Privacy (GDPR/HIPAA Alignment)](#10-audit-logging-phi-security--data-privacy-gdprhipaa-alignment)
 11. [Decisions on Architecture & Open Questions](#11-decisions-on-architecture--open-questions)
 12. [Scaffolding & Implementation Sequence](#12-scaffolding--implementation-sequence)
 13. [Comprehensive Testing Strategy](#13-comprehensive-testing-strategy)
@@ -52,7 +52,7 @@
 
 # 1. Product Overview & Architectural Philosophy
 
-The system is a multi-tenant hospital management software platform engineered as a modular monolith in Laravel 11. It allows independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, strict regulatory compliance (HIPAA and GDPR guidelines), and high-throughput operational efficiency.
+The system is a multi-tenant hospital management software platform engineered as a modular monolith in Laravel 12. It allows independent hospitals, clinics, and medical centers to operate autonomously on a single unified infrastructure while enforcing absolute data isolation, a HIPAA-aligned security architecture, support for GDPR-aligned data erasure/anonymization workflows, and high-throughput operational efficiency.
 
 ```
                          ┌─────────────────────────────────┐
@@ -89,7 +89,7 @@ The system is a multi-tenant hospital management software platform engineered as
 1. **Defense-in-Depth Data Isolation**: Tenant isolation cannot rely on a single software layer. It is enforced across multiple tiers: domain-level middleware, an automated Eloquent Global Scope, CI architecture validation, and composite database constraints.
 2. **Strict PHI & Demographics Segregation**: Personal demographic data (name, phone) is separated at the schema level from sensitive clinical records (allergies, conditions, vitals, diagnoses) to enforce role-based access physically, not just conceptually.
 3. **Monolithic Simplicity with Livewire 3**: No complex decoupled SPA overhead. High-fidelity, reactive user interfaces are built with Laravel Blade, Livewire 3, Alpine.js, and Tailwind CSS.
-4. **Dual-Layer Encryption & GDPR Compliance**: Database tables use MySQL InnoDB Transparent Data Encryption (TDE) at rest, supplemented by application-level encrypted field casts for sensitive clinical notes. GDPR Right-to-Erasure is supported via a cryptographically irreversible anonymization engine.
+4. **Dual-Layer Encryption & Data Privacy Workflows**: Database tables use MySQL InnoDB Transparent Data Encryption (TDE) at rest, supplemented by application-level encrypted field casts for sensitive clinical notes. Supports GDPR-aligned data erasure/anonymization workflows via a cryptographically irreversible anonymization engine.
 
 ---
 
@@ -135,7 +135,7 @@ Relying solely on an Eloquent global scope creates a single point of failure (ra
 2. **Database Composite Unique Constraints**:
    * All business keys (e.g. `patient_number`, `invoice_number`, `order_number`) use composite unique keys prefixed with `tenant_id` (`UNIQUE(tenant_id, patient_number)`). Cross-tenant collisions or accidental cross-inserts violate database constraints immediately.
 3. **Automated Route-Model Binding Scoping**:
-   * Laravel 11 scoped bindings (`/tenants/{tenant:subdomain}/patients/{patient:uuid}`) verify that the queried entity's `tenant_id` strictly matches the route's tenant context before reaching controller actions.
+   * Laravel 12 scoped bindings (`/tenants/{tenant:subdomain}/patients/{patient:uuid}`) verify that the queried entity's `tenant_id` strictly matches the route's tenant context before reaching controller actions.
 
 ---
 
@@ -197,25 +197,25 @@ All tables run on MySQL 8.0+ with InnoDB and Transparent Data Encryption (TDE). 
 *Indexes: UNIQUE(`tenant_id`, `key`)*
 
 #### `users`
-*Fixes the MySQL NULL-in-unique-index limitation for Platform Admins via a virtual generated column.*
+*Fixes the MySQL NULL-in-unique-index limitation for Platform Admins via a stored generated column.*
 
-| Column | Type | Constraints | Nullable | Default | Description |
-| :--- | :--- | :--- | :--- | :--- | :--- |
-| `id` | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT | No | | Internal user ID |
-| `uuid` | CHAR(36) | UNIQUE | No | | External UUIDv4 |
-| `tenant_id` | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE | Yes | NULL | NULL for platform admins |
-| `tenant_scope_key`| BIGINT UNSIGNED | GENERATED ALWAYS AS (COALESCE(tenant_id, 0)) STORED | No | 0 | Virtual column for indexing |
-| `name` | VARCHAR(191) | | No | | Full name |
-| `email` | VARCHAR(191) | | No | | User login email |
-| `password` | VARCHAR(255) | | No | | Bcrypt hashed password |
-| `phone` | VARCHAR(32) | | Yes | NULL | Contact phone |
-| `status` | ENUM | 'ACTIVE','INVITED','DEACTIVATED' | No | 'ACTIVE' | Account state |
-| `email_verified_at`| TIMESTAMP | | Yes | NULL | Email verification time |
-| `two_factor_secret`| TEXT | Encrypted at rest (`casts => encrypted`) | Yes | NULL | 2FA TOTP secret |
-| `last_login_at` | TIMESTAMP | | Yes | NULL | Last authentication |
-| `created_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `updated_at` | TIMESTAMP | | Yes | CURRENT_TIMESTAMP | Timestamp |
-| `deleted_at` | TIMESTAMP | | Yes | NULL | Soft delete timestamp |
+| Column              | Type            | Constraints                                         | Nullable | Default           | Description                                 |
+| :--------------------| :----------------| :----------------------------------------------------| :---------| :------------------| :--------------------------------------------|
+| `id`                | BIGINT UNSIGNED | PRIMARY KEY, AUTO_INCREMENT                         | No       |                   | Internal user ID                            |
+| `uuid`              | CHAR(36)        | UNIQUE                                              | No       |                   | External UUIDv4                             |
+| `tenant_id`         | BIGINT UNSIGNED | FK -> tenants(id) ON DELETE CASCADE                 | Yes      | NULL              | NULL for platform admins                    |
+| `tenant_scope_key`  | BIGINT UNSIGNED | GENERATED ALWAYS AS (COALESCE(tenant_id, 0)) STORED | No       | 0                 | Stored generated column for unique indexing |
+| `name`              | VARCHAR(191)    |                                                     | No       |                   | Full name                                   |
+| `email`             | VARCHAR(191)    |                                                     | No       |                   | User login email                            |
+| `password`          | VARCHAR(255)    |                                                     | No       |                   | Bcrypt hashed password                      |
+| `phone`             | VARCHAR(32)     |                                                     | Yes      | NULL              | Contact phone                               |
+| `status`            | ENUM            | 'ACTIVE','INVITED','DEACTIVATED'                    | No       | 'ACTIVE'          | Account state                               |
+| `email_verified_at` | TIMESTAMP       |                                                     | Yes      | NULL              | Email verification time                     |
+| `two_factor_secret` | TEXT            | Encrypted at rest (`casts => encrypted`)            | Yes      | NULL              | 2FA TOTP secret                             |
+| `last_login_at`     | TIMESTAMP       |                                                     | Yes      | NULL              | Last authentication                         |
+| `created_at`        | TIMESTAMP       |                                                     | Yes      | CURRENT_TIMESTAMP | Timestamp                                   |
+| `updated_at`        | TIMESTAMP       |                                                     | Yes      | CURRENT_TIMESTAMP | Timestamp                                   |
+| `deleted_at`        | TIMESTAMP       |                                                     | Yes      | NULL              | Soft delete timestamp                       |
 *Indexes: UNIQUE(`tenant_scope_key`, `email`)*
 
 ---
@@ -487,16 +487,28 @@ To prevent double-booking when appointments have varying durations, the booking 
   - Release Redis Lock
 ```
 
+> **Concurrency Design Principle**: The Redis distributed lock is the primary cross-process serialization mechanism to serialize concurrent reservation requests across multiple application servers. The MySQL transaction and pessimistic lock (`FOR UPDATE`) provide database-level consistency within the critical section to prevent duplicate insertions.
+
 ### 6.2 Pharmacy FEFO Dispensation & Atomic Stock Depletion
-Prescriptions are dispensed strictly following **First-Expired, First-Out (FEFO)**:
-1. When confirmed for dispensing, query batches: `WHERE medicine_id = ? AND quantity > 0 ORDER BY expiry_date ASC`.
-2. Inside a database transaction:
-   * Allocate units from earliest expiring batches.
-   * Decrement `medicine_batches.quantity`.
-   * Log an immutable row in `inventory_transactions` (`type = 'DISPENSE'`, `quantity = -X`).
-3. Decrement `medicines.current_stock`.
+Prescriptions are dispensed strictly following **First-Expired, First-Out (FEFO)** with row-level pessimistic locking to eliminate race conditions between simultaneous dispensers:
+
+1. Inside a database transaction, explicitly lock eligible batches:
+   ```sql
+   SELECT * FROM medicine_batches
+   WHERE medicine_id = :medicine_id
+     AND tenant_id = :tenant_id
+     AND quantity > 0
+     AND expiry_date >= CURRENT_DATE
+   ORDER BY expiry_date ASC
+   FOR UPDATE;
+   ```
+   *Row-level locking (`FOR UPDATE`) guarantees that two simultaneous dispensing requests for the same medication cannot read the same available quantity before decrementing.*
+2. Allocate units across batches in FEFO order:
+   * Decrement each allocated `medicine_batches.quantity`.
+   * Insert corresponding row in `inventory_transactions` (`type = 'DISPENSE'`, `quantity = -X`, `balance_after = new_batch_bal`).
+3. Decrement `medicines.current_stock` by total dispensed quantity.
 4. If `current_stock <= reorder_level`, dispatch `LowStockAlertNotification`.
-5. Update prescription status to `'DISPENSED'`.
+5. Update `prescription_items.dispensed_quantity` and mark prescription status as `'DISPENSED'`.
 
 ### 6.3 Inpatient Bed Occupancy & Room Charge Calculation
 * **Bed State Transitions**: `AVAILABLE` ↔ `OCCUPIED` ↔ `RESERVED` ↔ `MAINTENANCE`.
@@ -577,11 +589,11 @@ Managed via Laravel Horizon across three Redis queues:
 | `ProcessBatchStockWarningJob` | `high` | `InventoryTransactionRecorded` | Alerts pharmacists of low or expiring stock |
 | `CalculateDailyBedChargesJob`| `reports` | Scheduled (00:01 daily) | Computes daily occupancy fees for active stays |
 | `StripeWebhookReconciliationJob`| `high` | Stripe webhook received | Idempotently updates subscription/invoice status |
-| `AnonymizePatientDataJob` | `reports` | `PatientErasureRequested` | Executes GDPR-compliant irreversible anonymization |
+| `AnonymizePatientDataJob` | `reports` | `PatientErasureRequested` | Executes irreversible anonymization supporting GDPR-aligned erasure |
 
 ---
 
-# 10. Audit Logging, PHI Security & GDPR Right-to-Erasure
+# 10. Audit Logging, PHI Security & Data Privacy (GDPR/HIPAA Alignment)
 
 ### 10.1 Dual-Layer Encryption Strategy
 1. **Infrastructure Level**: MySQL InnoDB Transparent Data Encryption (TDE) encrypts all database files and logs on disk.
@@ -595,7 +607,9 @@ Managed via Laravel Horizon across three Redis queues:
 * Any read access to `patient_clinical_profiles` or clinical records generates an immutable `VIEW_PHI` audit log entry.
 * Database user grants for application connections strictly exclude `UPDATE` or `DELETE` on the `audit_logs` table.
 
-### 10.3 GDPR Right-to-Erasure (Anonymization Engine)
+### 10.3 GDPR-Aligned Right-to-Erasure (Anonymization Engine)
+Medical regulations require retaining clinical records and financial books for statutory periods (often 5–10 years), which must be balanced with GDPR Art. 17 (Right to Erasure) obligations. Rather than claiming absolute legal compliance from software architecture alone (which legally depends on organizational contracts, Data Processing Agreements, Business Associate Agreements, and jurisdictional retention mandates), the platform provides an architectural mechanism that supports GDPR-aligned erasure workflows:
+
 When `AnonymizePatientDataJob` executes:
 1. `patients` demographic record is sanitized (`first_name = 'ANONYMIZED'`, phone/email zeroed).
 2. `patient_clinical_profiles` row is hard-deleted.
@@ -607,20 +621,21 @@ When `AnonymizePatientDataJob` executes:
 # 11. Decisions on Architecture & Open Questions
 
 1. **Tenant Isolation Single Point of Failure**: Addressed with a 3-tier defense: Eloquent global scope, automated CI architectural tests, and composite unique keys.
-2. **Platform Admin Unique Email Constraint**: Resolved using a virtual generated column `tenant_scope_key = COALESCE(tenant_id, 0)` with `UNIQUE(tenant_scope_key, email)`.
+2. **Platform Admin Unique Email Constraint**: Resolved using a stored generated column `tenant_scope_key = COALESCE(tenant_id, 0)` with `UNIQUE(tenant_scope_key, email)`.
 3. **Segregation of PHI from Demographics**: Solved by splitting `patients` into `patients` (demographic) and `patient_clinical_profiles` (clinical PHI).
 4. **Appointment Slot Collisions**: Range overlap verification (`start_time < :end AND end_time > :start`) inside a pessimistic lock (`FOR UPDATE`) replaces exact-time matching.
 5. **Soft Deletes**: Added `deleted_at TIMESTAMP NULL` to all core transactional and demographic tables.
 6. **Platform-Side Billing**: Added `platform_plans`, `platform_subscriptions`, and `tenant_usage_metering` tables.
 7. **Custom Domain SSL**: Automates SSL issuance via Caddy On-Demand TLS or Cloudflare for SaaS.
 8. **Stripe Integration**: Added `StripeWebhookReconciliationJob` with idempotency safeguards.
+9. **Scalability Target**: The architectural foundation (stateless application containers, Redis queue/cache/locks, and MySQL read replicas) is designed to scale horizontally. This is an initial architectural scalability target — requiring load testing and benchmark validation before making production throughput claims.
 
 ---
 
 # 12. Scaffolding & Implementation Sequence
 
 1. **Phase 1: Foundation & Multi-Tenancy Core**
-   * Setup Laravel 11, Livewire 3, Tailwind CSS.
+   * Setup Laravel 12, Livewire 3, Tailwind CSS.
    * Run migrations for `tenants`, `platform_plans`, `platform_subscriptions`, `users`, and RBAC.
    * Implement `TenantManager` and `BelongsToTenant` trait with CI architecture test.
 2. **Phase 2: Master Data & Clinical Rosters**
